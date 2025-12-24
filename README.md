@@ -4,4 +4,4 @@ Happy Gaming!
 https://gitlab.com/QuarkTheAwesome/sonic2013-wiiu
 the script pulls from this repo ^^
 planning on adding icon support later, for now i just wanted to see if it'd work lmao
-only works on windows
+only works on windows, though if someone wants to fork this and add Mac/Linux support I wouldn't mind
