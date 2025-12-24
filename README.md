@@ -32,7 +32,9 @@ it says i have scripts disabled?
 It keeps saying build failed!!
 
 You have to install devkitPro, press Win + R, run C:\devkitPro\msys2\msys2_shell.bat -mingw64, then run pacman -S wiiu-tools
+
 devkitPro can be found here: https://devkitpro.org/wiki/Getting_Started
+
 if you want the source code of wiiu-tools, it can be found here: https://github.com/zhuowei/wiiu-tools
 
 I don't know where my ELF files were compiled to!
@@ -45,6 +47,7 @@ if they are .rpx, something REALLY went wrong, and you should report it immediat
 
 
 If NONE of these apply to you:
+
 submit them to the issues section on github
 
 
