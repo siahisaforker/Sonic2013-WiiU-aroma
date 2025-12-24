@@ -40,7 +40,9 @@ if you want the source code of wiiu-tools, it can be found here: https://github.
 I don't know where my ELF files were compiled to!
 
 the standard location of them is C:\Users\{Your User}\sonic2013-wiiu\Builds
+
 if they aren't there the build was not successful.
+
 if they are .rpx, something REALLY went wrong, and you should report it immediately
 
 
@@ -48,12 +50,16 @@ if they are .rpx, something REALLY went wrong, and you should report it immediat
 
 If NONE of these apply to you:
 
+
 submit them to the issues section on github
 
 
 
 TODO:
 fix data.rsdk button
+
 handle installing dependencies automatically
+
 implement better GUI (possibly a whole new api)
-fix wuhb converter with aroma tools
+
+fix wuhb converter
