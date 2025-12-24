@@ -1,4 +1,5 @@
 This script will install everything that you could possibly need for building sonic 1/2 for use with aroma. Submit problems with the script to Issues (or try and fix it yourself)
+!!THIS SCRIPT IS NOT FINISHED! IT WILL BE A LONG TIME UNTIL THIS ACTUALLY DOES WHAT IT'S SUPPOSED TO DO!!
 
 
 https://gitlab.com/QuarkTheAwesome/sonic2013-wiiu
