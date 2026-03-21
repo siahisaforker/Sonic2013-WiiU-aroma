@@ -23,7 +23,7 @@ This fork follows the original project's license. See the `LICENSE.md` file for 
 
 **Prerequisites**
 - `docker` (optional, recommended for reproducible builds)
-- `devkitPro` with WUT (for native builds)
+- `devkitPro` with WUT
 - Set the `DEVKITPRO` environment variable to your devkitPro install
 
 **Using Docker (recommended)**
