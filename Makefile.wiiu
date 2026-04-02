@@ -31,17 +31,24 @@ LDFLAGS += $(ARCH) $(RPXSPECS)
 LDFLAGS += -L$(WUT_ROOT)/lib
 LIBS = $(shell $(PKGCONFIG) --libs --static vorbisfile vorbis)
 
-# Prefer SDL from the repository submodule if it has been built locally
-ifneq ($(wildcard dependencies/all/SDL/.libs/libSDL2.a),)
-LIBS := dependencies/all/SDL/.libs/libSDL2.a $(LIBS)
-CXXFLAGS_ALL += -Idependencies/all/SDL/include
+# Prefer SDL from the devkitPro portlibs (prebuilt static libs)
+ifneq ($(wildcard $(DEVKITPRO)/portlibs/wiiu/lib/libSDL2.a),)
+    LDFLAGS += -L$(DEVKITPRO)/portlibs/wiiu/lib
+    CXXFLAGS_ALL += -I$(DEVKITPRO)/portlibs/wiiu/include/SDL2
+    LIBS := $(DEVKITPRO)/portlibs/wiiu/lib/libSDL2.a $(DEVKITPRO)/portlibs/wiiu/lib/libSDL2main.a $(LIBS)
 else
-# If no local SDL static library exists, fall back to pkg-config for SDL2
-CXXFLAGS_ALL += -Idependencies/all/SDL/include
-# Add SDL cflags from pkg-config when not using the local SDL build
-CXXFLAGS_ALL := $(shell $(PKGCONFIG) --cflags --static sdl2 2>/dev/null) $(CXXFLAGS_ALL)
-LIBS := $(shell $(PKGCONFIG) --libs --static sdl2 2>/dev/null) $(LIBS)
+    # Fallback: try pkg-config for SDL2 (will be empty if not installed)
+    CXXFLAGS_ALL := $(shell $(PKGCONFIG) --cflags --static sdl2 2>/dev/null) $(CXXFLAGS_ALL)
+    LIBS := $(shell $(PKGCONFIG) --libs --static sdl2 2>/dev/null) $(LIBS)
 endif
+
+# Ensure WUT (Wii U system) libraries are linked after SDL/system libs
+# so symbols like GX2*, OS* and WHB* are resolved. libwut provides aliases
+# such as libgx2.a, libwhb.a, libproc_ui.a via symlinks in WUT_ROOT/lib.
+LIBS += -lwut -lwhb -lproc_ui
+
+# Fallback: ensure basic SDL libs are linked if pkg-config didn't find them
+# If you need to force an SDL static link, add it to LIBS here (not enabled by default).
 
 SOURCES = \
           dependencies/all/tinyxml2/tinyxml2.cpp \
@@ -108,6 +115,7 @@ SOURCES = \
           RSDKv4/NativeObjects/VirtualDPadM.cpp \
           RSDKv4/NativeObjects/ZoneButton.cpp \
           RSDKv4/Platform/WiiUProc.cpp \
+          RSDKv4/Platform/WiiUEntry.cpp \
 
 ifneq ($(FORCE_CASE_INSENSITIVE),)
 	CXXFLAGS_ALL += -DFORCE_CASE_INSENSITIVE

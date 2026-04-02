@@ -474,7 +474,14 @@ event ObjectStartup
 	SpriteFrame(-96, 0, 44, 15, 1, 345)
 	SpriteFrame(-96, 0, 44, 15, 46, 345)
 	SpriteFrame(-96, 0, 84, 15, 91, 345)
-	SpriteFrame(-96, 0, 92, 15, 176, 345)
+	switch stage.playerListPos
+	case 2
+		SpriteFrame(-96, 0, 117, 15, 151, 361)
+		break
+	default
+		SpriteFrame(-96, 0, 92, 15, 176, 345)
+		break
+	end switch
 	if saved.region == 0
 		SpriteFrame(-96, 0, 92, 15, 269, 345)
 	else

@@ -288,7 +288,14 @@ event ObjectMain
 				arrayPos1 <<= 3
 				arrayPos1 += 1000
 				if stage.player2Enabled == 1
-					saveRAM[arrayPos1] = 3
+					switch stage.playerListPos
+						case 0
+							saveRAM[arrayPos1] = 3
+							break
+						case 2
+							saveRAM[arrayPos1] = 4
+							break
+					end switch
 				else
 					saveRAM[arrayPos1] = stage.playerListPos
 				end if

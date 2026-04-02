@@ -108,27 +108,68 @@ bool CheckRSDKFile(const char *filePath)
 #if !RETRO_USE_ORIGINAL_CODE
 int CheckFileInfo(const char *filepath)
 {
+    // Try a few normalized path variants to tolerate differences between how packs
+    // are built (with or without a leading "Data/" folder) and how the engine
+    // requests files (e.g. "Data/Game/Game.xml"). The engine lowercases before
+    // hashing, so compare lowercased candidates.
+    char candidateBuf[6][0x100];
+    int candCount = 0;
+
     char pathBuf[0x100];
     StringLowerCase(pathBuf, filepath);
-    byte buffer[0x10];
-    int len = StrLength(pathBuf);
-    GenerateMD5FromString(pathBuf, len, buffer);
 
-    for (int f = 0; f < rsdkContainer.fileCount; ++f) {
-        RSDKFileInfo *file = &rsdkContainer.files[f];
+    
+    StrCopy(candidateBuf[candCount++], pathBuf);
 
-        bool match = true;
-        for (int h = 0; h < 0x10; ++h) {
-            if (buffer[h] != file->hash[h]) {
-                match = false;
-                break;
-            }
-        }
-        if (!match)
-            continue;
-
-        return f;
+    // If path starts with "data/", try without that prefix
+    if (strncmp(pathBuf, "data/", 5) == 0) {
+        StrCopy(candidateBuf[candCount++], pathBuf + 5);
     }
+    else {
+        // If it doesn't start with data/, try adding it
+        char tmp[0x100];
+        sprintf(tmp, "data/%s", pathBuf);
+        StrCopy(candidateBuf[candCount++], tmp);
+    }
+
+    // Also try stripping a leading slash if present
+    if (pathBuf[0] == '/' || pathBuf[0] == '\\') {
+        StrCopy(candidateBuf[candCount++], pathBuf + 1);
+    }
+
+    // If previous candidates didn't include a variant without the data/ prefix,
+    // ensure you try the no-prefix version as well
+    if (candCount < 6) {
+        // If original contained a '/', try suffix after first '/'
+        const char *p = strchr(pathBuf, '/');
+        if (p && *(p + 1)) {
+            StrCopy(candidateBuf[candCount++], p + 1);
+        }
+    }
+
+    byte buffer[0x10];
+
+    for (int ci = 0; ci < candCount; ++ci) {
+        int len = StrLength(candidateBuf[ci]);
+        GenerateMD5FromString(candidateBuf[ci], len, buffer);
+
+        for (int f = 0; f < rsdkContainer.fileCount; ++f) {
+            RSDKFileInfo *file = &rsdkContainer.files[f];
+
+            bool match = true;
+            for (int h = 0; h < 0x10; ++h) {
+                if (buffer[h] != file->hash[h]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (!match)
+                continue;
+
+            return f;
+        }
+    }
+
     return -1;
 }
 #endif

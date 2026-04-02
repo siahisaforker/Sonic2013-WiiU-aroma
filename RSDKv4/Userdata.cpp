@@ -36,6 +36,120 @@ int sendCounter = 0;
 #include <sys/types.h>
 #endif
 
+#if RETRO_PLATFORM == RETRO_WIIU
+static bool ReadWiiUGameFolderFromMetadata(char *outFolder, size_t outFolderSize)
+{
+    if (!outFolder || !outFolderSize)
+        return false;
+
+    const char *metaCandidates[] = {
+        "/code/metadata.txt",
+        "/vol/external01/wiiu/apps/RSDKv4_Sonic1/metadata.txt",
+        "/vol/external01/wiiu/apps/RSDKv4_Sonic2/metadata.txt",
+        "/vol/external01/wiiu/apps/RSDKv4/metadata.txt",
+        "metadata.txt",
+        "/content/apps/RSDKv4_Sonic1/metadata.txt",
+        "/content/apps/RSDKv4_Sonic2/metadata.txt",
+        "/content/apps/RSDKv4/metadata.txt",
+        "content/apps/RSDKv4/metadata.txt",
+        NULL,
+    };
+
+    outFolder[0] = '\0';
+
+    for (int i = 0; metaCandidates[i]; ++i) {
+        FileIO *metaFile = fOpen(metaCandidates[i], "rb");
+        if (!metaFile)
+            continue;
+
+        char metaBuf[0x400];
+        int bytesRead = fRead(metaBuf, 1, sizeof(metaBuf) - 1, metaFile);
+        metaBuf[bytesRead] = '\0';
+        fClose(metaFile);
+
+        const char *key = "game_folder=";
+        char *pos       = strstr(metaBuf, key);
+        if (!pos)
+            continue;
+
+        pos += strlen(key);
+        size_t writePos = 0;
+        while (*pos && *pos != '\n' && *pos != '\r' && writePos < outFolderSize - 1) {
+            outFolder[writePos++] = *pos++;
+        }
+        outFolder[writePos] = '\0';
+
+        if (writePos > 0) {
+            printLog("WiiU metadata %s -> game_folder=%s", metaCandidates[i], outFolder);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool ResolveWiiUExternalGameFolder(char *outFolder, size_t outFolderSize)
+{
+    if (!outFolder || !outFolderSize)
+        return false;
+
+    outFolder[0] = '\0';
+
+    if (launchPath[0]) {
+        if (strstr(launchPath, "RSDKv4_Sonic1") != NULL || strstr(launchPath, "Sonic1.wuhb") != NULL) {
+            StrCopy(outFolder, "Sonic1");
+            return true;
+        }
+        if (strstr(launchPath, "RSDKv4_Sonic2") != NULL || strstr(launchPath, "Sonic2.wuhb") != NULL) {
+            StrCopy(outFolder, "Sonic2");
+            return true;
+        }
+    }
+
+    if (ReadWiiUGameFolderFromMetadata(outFolder, outFolderSize))
+        return true;
+
+#if defined(PACKAGED_GAME)
+    if (PACKAGED_GAME == 1) {
+        StrCopy(outFolder, "Sonic1");
+        return true;
+    }
+    if (PACKAGED_GAME == 2) {
+        StrCopy(outFolder, "Sonic2");
+        return true;
+    }
+#endif
+
+    FileIO *file = fOpen("/vol/external01/Sonic2/Data.rsdk", "rb");
+    if (file) {
+        fClose(file);
+        StrCopy(outFolder, "Sonic2");
+        return true;
+    }
+
+    file = fOpen("/vol/external01/Sonic1/Data.rsdk", "rb");
+    if (file) {
+        fClose(file);
+        StrCopy(outFolder, "Sonic1");
+        return true;
+    }
+
+    return false;
+}
+
+static void ConfigureWiiUUserdataRoot()
+{
+    char folder[0x100];
+    if (!ResolveWiiUExternalGameFolder(folder, sizeof(folder))) {
+        printLog("WiiU userdata root unresolved; keeping BASE_PATH '%s'", gamePath);
+        return;
+    }
+
+    sprintf(gamePath, "/vol/external01/%s/", folder);
+    printLog("WiiU userdata root set to %s", gamePath);
+}
+#endif
+
 #if !RETRO_USE_ORIGINAL_CODE
 bool forceUseScripts          = false;
 bool forceUseScripts_Config   = false;
@@ -133,6 +247,10 @@ void InitUserdata()
     // userdata files are loaded from this directory
     sprintf(gamePath, "%s", BASE_PATH);
     sprintf(modsPath, "%s", BASE_PATH);
+
+#if RETRO_PLATFORM == RETRO_WIIU
+    ConfigureWiiUUserdataRoot();
+#endif
 
 #if RETRO_PLATFORM == RETRO_OSX
     sprintf(gamePath, "%s/RSDKv4", getResourcesPath());

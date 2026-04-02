@@ -3237,127 +3237,6 @@ function PlayerObject_KnuxGlideLeft
 			if checkResult == 1
 				if temp2 == temp3
 					object.state = PlayerObject_KnuxWallClimb
-					object.speed = 0
-					object.xvel = 0
-					object.yvel = 0
-					object.value1 = 0
-					PlaySfx(SfxName[Catch], 0)
-				else
-					object.value1 = 0
-					object.xvel >>= 2
-					object.speed = object.xvel
-					object.animation = ANI_GLIDING_DROP
-					object.state = PlayerObject_KnuxGlideDrop
-				end if
-			else
-				if temp0 == 1
-					object.value1 = 0
-					object.xvel >>= 2
-					object.speed = object.xvel
-					object.animation = ANI_GLIDING_DROP
-					object.state = PlayerObject_KnuxGlideDrop
-				end if
-			end if
-		else
-			object.value1 = 0
-			object.xvel >>= 2
-			object.speed = object.xvel
-			object.animation = ANI_GLIDING_DROP
-			if object[0].ixpos <= 10
-				object.direction = FLIP_NONE
-			endif
-			object.state = PlayerObject_KnuxGlideDrop
-		end if
-	else
-		if object.collisionMode == CMODE_FLOOR
-			object.value1 = 0
-			object.state = PlayerObject_KnuxGlideSlide
-			object.animation = ANI_GLIDING_STOP
-			object.speed = object.xvel
-		else
-			object.state = PlayerObject_HandleGround
-			CallFunction(PlayerObject_ResetOnFloor)
-			object.value14 = 0
-		end if
-	end if
-	temp0 = stage.curYBoundary1
-	temp0 += 16
-	temp0 <<= 16
-	if object.ypos < temp0
-		object.xvel = 0
-		object.speed = object.xvel
-	end if
-end function
-
-
-function PlayerObject_KnuxGlideLeft
-	if object.gravity == GRAVITY_AIR
-		if object.jumpHold == 1
-			if object.value1 == 256
-				if object.speed < 0x180000
-					object.speed += 0x400
-				end if
-			else
-				if object.speed < 0x40000
-					object.speed += 0x1000
-				end if
-			end if
-			if object.yvel > 0x8000
-				object.yvel -= 0x2000
-			else
-				object.yvel += 0x2000
-			end if
-			if object.value1 < 256
-				object.value1 += 4
-			end if
-			if object.value1 < 170
-				if object.value1 > 86
-					object.frame = 0
-				else
-					if object.value1 > 44
-						object.frame = 1
-					else
-						object.frame = 2
-					end if
-				end if
-			else
-				if object.value1 < 212
-					object.frame = 1
-				else
-					object.frame = 2
-				end if
-			end if
-			temp7 = object.xpos
-			if object.value1 < 128
-				object.direction = FLIP_NONE
-				temp0 = 0
-				temp1 = 0
-			else
-				object.direction = FLIP_X
-				object.xpos = temp7
-				object.xpos += object.xvel
-				object.ypos = object.ypos
-				ObjectTileCollision(CSIDE_RWALL, -12, -2, object.collisionPlane)
-				temp0 = checkResult
-				temp2 = object.xpos
-				object.xpos = temp7
-				object.xpos += object.xvel
-				ObjectTileCollision(CSIDE_RWALL, -12, 11, object.collisionPlane)
-				temp1 = checkResult
-				temp3 = object.xpos
-			end if
-			Cos(object.xvel, object.value1)
-			object.xvel *= object.speed
-			object.xvel >>= 9
-			if object.right == 1
-				object.state = PlayerObject_KnuxGlideRight
-			end if
-			object.xpos = temp7
-			checkResult = temp0
-			checkResult &= temp1
-			if checkResult == 1
-				if temp2 == temp3
-					object.state = PlayerObject_KnuxWallClimb
 					//if PlayerObject_SuperState == 1
 					//	if saved.gogoplus > 0
 					//		if object.speed > 0x48000
@@ -3393,6 +3272,9 @@ function PlayerObject_KnuxGlideLeft
 			object.xvel >>= 2
 			object.speed = object.xvel
 			object.animation = ANI_GLIDING_DROP
+			if object[0].ixpos <= 10
+				object.direction = FLIP_NONE
+			endif
 			object.state = PlayerObject_KnuxGlideDrop
 		end if
 	else
