@@ -25,7 +25,9 @@ CXXFLAGS_ALL = $(shell $(PKGCONFIG) --cflags --static vorbisfile vorbis 2>/dev/n
                -Idependencies/all/stb-image/ \
                -Idependencies/all/tinyxml2/ \
                -DAROMA_SAFE \
+               -DRETRO_WIIU_CF_AROMA \
 
+LDFLAGS += -Wl,-T,RSDKv4/Platform/WiiUHeapAnchor.ld
 LDFLAGS += $(ARCH) $(RPXSPECS)
 # Ensure the WUT library directory is searched when linking so -lwut is found.
 LDFLAGS += -L$(WUT_ROOT)/lib
@@ -115,7 +117,6 @@ SOURCES = \
           RSDKv4/NativeObjects/VirtualDPadM.cpp \
           RSDKv4/NativeObjects/ZoneButton.cpp \
           RSDKv4/Platform/WiiUProc.cpp \
-          RSDKv4/Platform/WiiUEntry.cpp \
 
 ifneq ($(FORCE_CASE_INSENSITIVE),)
 	CXXFLAGS_ALL += -DFORCE_CASE_INSENSITIVE

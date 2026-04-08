@@ -3,10 +3,14 @@
 #if RETRO_PLATFORM == RETRO_WIIU
 
 #if defined(RETRO_WIIU_CF_AROMA)
-// Provide compat stubs
+// Provide compat stubs — Aroma manages the process lifecycle itself,
+// so ProcUI init/shutdown/isRunning are no-ops and the foreground
+// hooks are empty.
 void WiiU_ProcInit() { }
 void WiiU_ProcShutdown() { }
 bool WiiU_ProcIsRunning() { return true; }
+extern "C" void WiiU_OnReleaseForeground() { }
+extern "C" void WiiU_OnAcquireForeground() { }
 
 
 #else
@@ -36,10 +40,7 @@ bool WiiU_ProcIsRunning() { return WHBProcIsRunning(); }
 
 #if RETRO_PLATFORM == RETRO_WIIU
 #if defined(ENABLE_WIIU_FOREGROUND_HANDLERS)
-// If handlers are enabled, call the optional render device helpers if
-// they're present. Mark the default implementations as weak so other
-// translation units (e.g. `WiiUForeground.cpp`) can provide strong
-// overrides without creating multiple-definition link errors.
+
 extern int InitRenderDevice() __attribute__((weak));
 extern void ReleaseRenderDevice() __attribute__((weak));
 
