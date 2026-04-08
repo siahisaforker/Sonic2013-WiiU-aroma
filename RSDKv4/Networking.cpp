@@ -1,9 +1,6 @@
 #include "RetroEngine.hpp"
 #if RETRO_USE_NETWORKING
 
-// If building a package for Aroma (or other restricted launchers) define
-// AROMA_SAFE to disable networking and thread creation which can hang
-// or be unsupported at runtime on some consoles.
 #if defined(AROMA_SAFE)
 
 #include "Networking.hpp"
