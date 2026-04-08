@@ -24,7 +24,6 @@ CXXFLAGS_ALL = $(shell $(PKGCONFIG) --cflags --static vorbisfile vorbis 2>/dev/n
                -Idependencies/all/asio/include/ \
                -Idependencies/all/stb-image/ \
                -Idependencies/all/tinyxml2/ \
-               -DAROMA_SAFE \
                -DRETRO_WIIU_CF_AROMA \
 
 LDFLAGS += -Wl,-T,RSDKv4/Platform/WiiUHeapAnchor.ld

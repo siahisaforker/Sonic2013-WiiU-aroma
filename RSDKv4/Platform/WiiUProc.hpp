@@ -7,10 +7,6 @@
 void WiiU_ProcInit();
 void WiiU_ProcShutdown();
 bool WiiU_ProcIsRunning();
-// Optional hooks called when ProcUI requests foreground release/acquire.
-// These have empty default implementations in `WiiUProc.cpp` and can be
-// overridden by platform-specific code to free/restore MEM1 or other
-// foreground-only resources.
 #ifdef __cplusplus
 extern "C" {
 #endif

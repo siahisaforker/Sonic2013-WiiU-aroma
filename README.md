@@ -4,15 +4,12 @@ This repository is a fork of https://gitlab.com/QuarkTheAwesome/sonic2013-wiiu w
 
 ## Highlights
 - Focused fixes and build improvements for Aroma and Wii U runtime behavior
-- Packaging helpers and scripts for creating WUHB / Wii U-ready artifacts
+- Packaging helpers and scripts for creating WUHBs easily
 - Quality-of-life changes and platform-specific fixes
 
 current known issues:
 
-incredibly slow loading (with the mods versions) - Will be fixed soon
-
-
-Couldn't load Game.xml (logs) - this only seems to happen on real hardware, i haven't been able to reproduce it but expect a fix in the near future
+incredibly slow loading (with the mods versions) - Will be fixed soon (hopefully, might not be possible)
 
 
 Pause softlocking the whole game on unmodded - currently figuring out how to fix it, as of now the next few builds will probably just have the pause button disabled entirely
