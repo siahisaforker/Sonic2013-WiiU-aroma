@@ -1,44 +1,21 @@
-FROM devkitpro/devkitppc:20210726 AS wut-build
-RUN wget https://github.com/devkitPro/wut/archive/9174f415ed2124a0aaaf9754c14ef680748e6fa7.zip -O wut.zip && unzip wut.zip && rm wut.zip
-RUN cd wut-* && make -j$(nproc) install DESTDIR=/wut-out
+FROM devkitpro/devkitppc:latest
 
-#TODO why does this not have input?
-FROM devkitpro/devkitppc:20210726 AS sdl-build
-COPY --from=wut-build /wut-out/ /
+RUN apt-get update && apt-get install -y --no-install-recommends python3 && \
+    rm -rf /var/lib/apt/lists/*
 
-RUN wget https://github.com/yawut/SDL/archive/81eba84eb9cf213e4a4341727f436562270c8e08.zip -O sdl.zip && unzip sdl.zip && rm sdl.zip
-RUN cd SDL-* && mkdir build && cd build && \
-  cmake .. -DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/wut/share/wut.toolchain.cmake \
-  -DCMAKE_INSTALL_PREFIX=/opt/devkitpro/portlibs/wiiu && \
-  make -j$(nproc) install DESTDIR=/sdl-out
+RUN dkp-pacman -Syyu --noconfirm && \
+    dkp-pacman -S --noconfirm --needed wiiu-dev ppc-libvorbisidec ppc-libvorbis ppc-libogg || true
 
-FROM devkitpro/devkitppc:20210726
-COPY --from=wut-build /wut-out/ /
-COPY --from=sdl-build /sdl-out/ /
+RUN wget -q https://github.com/yawut/SDL/archive/81eba84eb9cf213e4a4341727f436562270c8e08.zip -O /tmp/sdl.zip && \
+    cd /tmp && unzip sdl.zip && rm sdl.zip && \
+    cd SDL-* && mkdir build && cd build && \
+    cmake .. -DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/wut/share/wut.toolchain.cmake \
+             -DCMAKE_INSTALL_PREFIX=/opt/devkitpro/portlibs/wiiu && \
+    make -j$(nproc) && make install && \
+    rm -rf /tmp/SDL-*
 
-# Workaround: Debian Buster archive has moved, point apt to archive mirrors
-RUN set -eux; \
-  echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until; \
-  # remove any existing .list files (these may reference deb.debian.org/backports)
-  rm -f /etc/apt/sources.list.d/* || true; \
-  printf 'deb http://archive.debian.org/debian buster main contrib non-free\n' > /etc/apt/sources.list; \
-  printf 'deb http://archive.debian.org/debian-security buster/updates main contrib non-free\n' >> /etc/apt/sources.list; \
-  apt-get update; \
-  apt-get install -y --no-install-recommends \
-    build-essential \
-    pkg-config \
-    libsdl2-dev \
-    libvorbis-dev \
-    libglew-dev \
-    unzip \
-    wget \
-    cmake \
-    ca-certificates; \
-  rm -rf /var/lib/apt/lists/*
-
-# Ensure pkg-config can find the portlibs installed earlier (set explicitly)
 ENV PKG_CONFIG_PATH=/opt/devkitpro/portlibs/wiiu/lib/pkgconfig:/opt/devkitpro/portlibs/ppc/lib/pkgconfig
 
 WORKDIR /app
-CMD ["make", "-f", "Makefile.wiiu", "-j$(nproc)"]
+CMD ["python3", "scripts/build.py", "all"]
 

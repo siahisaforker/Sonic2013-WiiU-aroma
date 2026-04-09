@@ -30,7 +30,7 @@ jobs:
             -v "$GITHUB_WORKSPACE:/workspace" \
             -w /workspace \
             sonic3air-wiiu \
-            bash -lc 'bash ./scripts/build_wiiu_wuhbs.sh --out-dir /workspace/out'
+            bash -lc 'python3 scripts/build.py all --out-dir /workspace/out'
 
       - name: Upload RPX/ELF artifacts for debugging
         uses: actions/upload-artifact@v4
