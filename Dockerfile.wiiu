@@ -4,15 +4,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 && \
     rm -rf /var/lib/apt/lists/*
 
 RUN dkp-pacman -Syyu --noconfirm && \
-    dkp-pacman -S --noconfirm --needed wiiu-dev ppc-libvorbisidec ppc-libvorbis ppc-libogg || true
+    dkp-pacman -S --noconfirm --needed wiiu-dev ppc-libvorbisidec ppc-libvorbis ppc-libogg
 
-RUN wget -q https://github.com/yawut/SDL/archive/81eba84eb9cf213e4a4341727f436562270c8e08.zip -O /tmp/sdl.zip && \
-    cd /tmp && unzip sdl.zip && rm sdl.zip && \
-    cd SDL-* && mkdir build && cd build && \
-    cmake .. -DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/wut/share/wut.toolchain.cmake \
-             -DCMAKE_INSTALL_PREFIX=/opt/devkitpro/portlibs/wiiu && \
-    make -j$(nproc) && make install && \
-    rm -rf /tmp/SDL-*
+# SDL is built from the vendored local source (dependencies/all/SDL) by the
+# Makefile, so no separate SDL install is needed here.
 
 ENV PKG_CONFIG_PATH=/opt/devkitpro/portlibs/wiiu/lib/pkgconfig:/opt/devkitpro/portlibs/ppc/lib/pkgconfig
 
