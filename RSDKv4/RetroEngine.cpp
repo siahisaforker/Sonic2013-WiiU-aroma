@@ -11,6 +11,7 @@ bool engineDebugMode = false;
 
 #if RETRO_PLATFORM == RETRO_WIIU
 #include "Platform/WiiUProc.hpp"
+#include "Platform/WiiUDRC.hpp"
 #if defined(__WUT__)
 #include <proc_ui/procui.h>
 #endif

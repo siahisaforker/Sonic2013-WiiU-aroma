@@ -32,16 +32,14 @@ LDFLAGS += $(ARCH) $(RPXSPECS)
 LDFLAGS += -L$(WUT_ROOT)/lib
 LIBS = $(shell $(PKGCONFIG) --libs --static vorbisfile vorbis)
 
-# Prefer SDL from the devkitPro portlibs (prebuilt static libs)
-ifneq ($(wildcard $(DEVKITPRO)/portlibs/wiiu/lib/libSDL2.a),)
-    LDFLAGS += -L$(DEVKITPRO)/portlibs/wiiu/lib
-    CXXFLAGS_ALL += -I$(DEVKITPRO)/portlibs/wiiu/include/SDL2
-    LIBS := $(DEVKITPRO)/portlibs/wiiu/lib/libSDL2.a $(DEVKITPRO)/portlibs/wiiu/lib/libSDL2main.a $(LIBS)
-else
-    # Fallback: try pkg-config for SDL2 (will be empty if not installed)
-    CXXFLAGS_ALL := $(shell $(PKGCONFIG) --cflags --static sdl2 2>/dev/null) $(CXXFLAGS_ALL)
-    LIBS := $(shell $(PKGCONFIG) --libs --static sdl2 2>/dev/null) $(LIBS)
-endif
+# Build SDL2 from local source (contains DRC render hook modifications)
+SDL_DIR = dependencies/all/SDL
+SDL_LIB = $(SDL_DIR)/libSDL2.a
+CXXFLAGS_ALL += -I$(SDL_DIR)/include
+CFLAGS_SDL = $(MACHDEP) -O2 -g -ffunction-sections -fdata-sections \
+             -D__WIIU__ -D__WUT__ -I$(WUT_ROOT)/include \
+             -I$(DEVKITPRO)/portlibs/ppc/include -I$(SDL_DIR)/include
+LIBS := $(SDL_LIB) $(LIBS)
 
 # Ensure WUT (Wii U system) libraries are linked after SDL/system libs
 # so symbols like GX2*, OS* and WHB* are resolved. libwut provides aliases
@@ -116,6 +114,7 @@ SOURCES = \
           RSDKv4/NativeObjects/VirtualDPadM.cpp \
           RSDKv4/NativeObjects/ZoneButton.cpp \
           RSDKv4/Platform/WiiUProc.cpp \
+          RSDKv4/Platform/WiiUDRC.cpp \
 
 ifneq ($(FORCE_CASE_INSENSITIVE),)
 	CXXFLAGS_ALL += -DFORCE_CASE_INSENSITIVE
@@ -125,8 +124,47 @@ endif
 OFILES = $(SOURCES:%=objects/%.o)
 LD = $(CXX)
 
+# Collect SDL2 C sources via the same globs used by SDL's own Makefile.wiiu
+SDL_CSOURCES = $(wildcard $(SDL_DIR)/src/*.c) \
+               $(wildcard $(SDL_DIR)/src/atomic/*.c) \
+               $(wildcard $(SDL_DIR)/src/audio/*.c) \
+               $(wildcard $(SDL_DIR)/src/audio/wiiu/*.c) \
+               $(wildcard $(SDL_DIR)/src/cpuinfo/*.c) \
+               $(wildcard $(SDL_DIR)/src/events/*.c) \
+               $(wildcard $(SDL_DIR)/src/file/*.c) \
+               $(wildcard $(SDL_DIR)/src/haptic/*.c) \
+               $(wildcard $(SDL_DIR)/src/haptic/dummy/*.c) \
+               $(wildcard $(SDL_DIR)/src/joystick/*.c) \
+               $(wildcard $(SDL_DIR)/src/joystick/wiiu/*.c) \
+               $(wildcard $(SDL_DIR)/src/joystick/dummy/*.c) \
+               $(wildcard $(SDL_DIR)/src/loadso/dummy/*.c) \
+               $(wildcard $(SDL_DIR)/src/power/*.c) \
+               $(wildcard $(SDL_DIR)/src/filesystem/dummy/*.c) \
+               $(wildcard $(SDL_DIR)/src/render/*.c) \
+               $(wildcard $(SDL_DIR)/src/render/wiiu/*.c) \
+               $(wildcard $(SDL_DIR)/src/render/software/*.c) \
+               $(wildcard $(SDL_DIR)/src/stdlib/*.c) \
+               $(wildcard $(SDL_DIR)/src/sensor/*.c) \
+               $(wildcard $(SDL_DIR)/src/thread/*.c) \
+               $(wildcard $(SDL_DIR)/src/thread/wiiu/*.c) \
+               $(wildcard $(SDL_DIR)/src/timer/*.c) \
+               $(wildcard $(SDL_DIR)/src/timer/wiiu/*.c) \
+               $(wildcard $(SDL_DIR)/src/timer/dummy/*.c) \
+               $(wildcard $(SDL_DIR)/src/video/*.c) \
+               $(wildcard $(SDL_DIR)/src/video/wiiu/*.c) \
+               $(wildcard $(SDL_DIR)/src/video/yuv2rgb/*.c) \
+               $(wildcard $(SDL_DIR)/src/video/dummy/*.c)
+SDL_OFILES = $(SDL_CSOURCES:%.c=objects/%.o)
+
 all: bin/RSDKv4.rpx
-bin/RSDKv4.elf: $(OFILES) bin
+bin/RSDKv4.elf: $(OFILES) $(SDL_LIB) bin
+
+$(SDL_LIB): $(SDL_OFILES)
+	$(AR) rcs $@ $^
+
+objects/$(SDL_DIR)/%.o: $(SDL_DIR)/%.c
+	mkdir -p $(@D)
+	$(CC) $(CFLAGS_SDL) -c $< -o $@
 
 bin:
 	mkdir -p bin
@@ -139,4 +177,4 @@ install: bin/RSDKv4
 	install -Dp -m755 bin/RSDKv4 $(prefix)/bin/RSDKv4
 
 clean:
-	rm -r -f bin && rm -r -f objects
+	rm -r -f bin && rm -r -f objects && rm -f $(SDL_LIB)

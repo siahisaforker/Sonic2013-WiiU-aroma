@@ -9,11 +9,7 @@ This repository is a fork of https://gitlab.com/QuarkTheAwesome/sonic2013-wiiu w
 
 current known issues:
 
-incredibly slow loading (with the mods versions) - Will be fixed soon (hopefully, might not be possible)
 
-
-Pause softlocking the whole game on unmodded - currently figuring out how to fix it, as of now the next few builds will probably just have the pause button disabled entirely
-
-i made this list real quickly so excuse the formatting
+Pause softlocking the whole game on unmodded - currently figuring out how to fix it
 
 TODO: Add pro controller and other wii controllers support

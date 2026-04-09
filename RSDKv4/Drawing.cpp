@@ -1,4 +1,8 @@
 #include "RetroEngine.hpp"
+#if RETRO_PLATFORM == RETRO_WIIU
+#include "Platform/WiiUDRC.hpp"
+#endif
+
 
 ushort blendLookupTable[BLENDTABLE_SIZE];
 ushort subtractLookupTable[BLENDTABLE_SIZE];
@@ -341,6 +345,10 @@ int InitRenderDevice()
 
     InitInputDevices();
 
+#if RETRO_PLATFORM == RETRO_WIIU
+    InitDRCOverlay();
+#endif
+
     return 1;
 }
 void FlipScreen()
@@ -432,6 +440,7 @@ void FlipScreen()
     SDL_RenderClear(Engine.renderer);
 
     ushort *pixels = NULL;
+
     if (!drawStageGFXHQ) {
         SDL_LockTexture(Engine.screenBuffer, NULL, (void **)&pixels, &pitch);
         ushort *frameBufferPtr = Engine.frameBuffer;
