@@ -42,9 +42,8 @@ CFLAGS_SDL = $(MACHDEP) -O2 -g -ffunction-sections -fdata-sections \
 LIBS := $(SDL_LIB) $(LIBS)
 
 # Ensure WUT (Wii U system) libraries are linked after SDL/system libs
-# so symbols like GX2*, OS* and WHB* are resolved. libwut provides aliases
-# such as libgx2.a, libwhb.a, libproc_ui.a via symlinks in WUT_ROOT/lib.
-LIBS += -lwut -lwhb -lproc_ui
+# so symbols like GX2*, OS* and WHB* are resolved.
+LIBS += -lwut
 
 # Fallback: ensure basic SDL libs are linked if pkg-config didn't find them
 # If you need to force an SDL static link, add it to LIBS here (not enabled by default).
