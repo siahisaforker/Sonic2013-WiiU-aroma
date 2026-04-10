@@ -55,7 +55,7 @@ struct RSDKContainer {
 extern RSDKContainer rsdkContainer;
 
 extern char fileName[0x100];
-extern byte fileBuffer[0x2000];
+extern byte fileBuffer[0x10000];
 extern int fileSize;
 extern int vFileSize;
 extern int readPos;
