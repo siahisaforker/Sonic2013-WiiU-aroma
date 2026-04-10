@@ -9,7 +9,6 @@ RUN apt -y install --no-install-recommends \
     apt-transport-https \
     curl \
     git \
-    gpg \
     imagemagick \
     make \
     python3 \
@@ -17,8 +16,7 @@ RUN apt -y install --no-install-recommends \
 
 # Store devkitPro GPG key locally.
 RUN mkdir -p /usr/local/share/keyring/
-RUN gpg --keyserver keyserver.ubuntu.com --receive-keys C9D672AF4128A2F1
-RUN gpg --export C9D672AF4128A2F1 > /usr/local/share/keyring/devkitpro-pub.gpg
+RUN wget -q https://apt.devkitpro.org/devkitpro-pub.gpg -O /usr/local/share/keyring/devkitpro-pub.gpg
 
 # Add the devkitPro apt repository.
 RUN echo "deb [signed-by=/usr/local/share/keyring/devkitpro-pub.gpg] https://apt.devkitpro.org stable main" > /etc/apt/sources.list.d/devkitpro.list
