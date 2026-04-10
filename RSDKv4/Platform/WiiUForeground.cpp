@@ -13,17 +13,19 @@
 #include <proc_ui/procui.h>
 #endif
 
-extern "C" {
 // Weak declarations for optional engine helpers. If these symbols are not
 // present in the link, the pointers will be NULL and the calls will be
 // skipped.
+// Note: InitRenderDevice / ReleaseRenderDevice have C++ linkage (declared
+// in Drawing.hpp), so they must NOT be inside an extern "C" block.
+extern int InitRenderDevice() __attribute__((weak));
+extern void ReleaseRenderDevice() __attribute__((weak));
+
+extern "C" {
 extern void GfxHeapDestroyForeground() __attribute__((weak));
 extern void GfxHeapDestroyMEM1() __attribute__((weak));
 extern void GfxHeapInitMEM1() __attribute__((weak));
 extern void GfxHeapInitForeground() __attribute__((weak));
-extern int InitRenderDevice() __attribute__((weak));
-extern void ReleaseRenderDevice() __attribute__((weak));
-extern void ProcUIDrawDoneRelease() __attribute__((weak));
 extern unsigned char sGfxHasForeground __attribute__((weak));
 }
 
@@ -50,8 +52,9 @@ extern "C" void WiiU_OnReleaseForeground()
         sGfxHasForeground = 0;
 
     // Notify ProcUI that the draw is done and the system can reclaim memory.
-    if (ProcUIDrawDoneRelease)
-        ProcUIDrawDoneRelease();
+#if defined(__WUT__)
+    ProcUIDrawDoneRelease();
+#endif
 }
 
 extern "C" void WiiU_OnAcquireForeground()

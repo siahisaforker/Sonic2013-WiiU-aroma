@@ -32,10 +32,8 @@ bool WiiU_ProcIsRunning() { return WHBProcIsRunning(); }
 // Weak foreground handler stubs – overridden by WiiUForeground.cpp when it
 // is part of the build.  Kept here so the link succeeds even without that
 // translation unit.
-extern "C" void WiiU_OnReleaseForeground() __attribute__((weak));
-extern "C" void WiiU_OnReleaseForeground() __attribute__((weak)) { }
-extern "C" void WiiU_OnAcquireForeground() __attribute__((weak));
-extern "C" void WiiU_OnAcquireForeground() __attribute__((weak)) { }
+extern "C" __attribute__((weak)) void WiiU_OnReleaseForeground() { }
+extern "C" __attribute__((weak)) void WiiU_OnAcquireForeground() { }
 
 #else
 // Non-WiiU platforms: no-op
