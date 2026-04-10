@@ -20,6 +20,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+# This is kinda hacky, but we'll see if it works
+      - name: Patch SDL nunchuk typo
+        run: |
+          sed -i 's/kpad\.nunchuck\b/kpad.nunchuk/g' \
+            dependencies/all/SDL/src/joystick/wiiu/SDL_wiiujoystick.c
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

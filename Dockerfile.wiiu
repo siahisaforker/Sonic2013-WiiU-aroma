@@ -1,16 +1,55 @@
-FROM devkitpro/devkitppc:latest
+# -*- mode: dockerfile -*-
+# Based on https://github.com/dkosmari/devkitpro-docker-images
 
-RUN apt-get update && apt-get install -y --no-install-recommends python3 && \
-    rm -rf /var/lib/apt/lists/*
+FROM debian:trixie-slim
 
-RUN dkp-pacman -Syyu --noconfirm && \
-    dkp-pacman -S --noconfirm --needed wiiu-dev ppc-libvorbisidec ppc-libvorbis ppc-libogg
+RUN apt -y update && apt -y upgrade
+
+RUN apt -y install --no-install-recommends \
+    apt-transport-https \
+    curl \
+    git \
+    gpg \
+    imagemagick \
+    make \
+    python3 \
+    wget
+
+# Store devkitPro GPG key locally.
+RUN mkdir -p /usr/local/share/keyring/
+RUN gpg --keyserver keyserver.ubuntu.com --receive-keys C9D672AF4128A2F1
+RUN gpg --export C9D672AF4128A2F1 > /usr/local/share/keyring/devkitpro-pub.gpg
+
+# Add the devkitPro apt repository.
+RUN echo "deb [signed-by=/usr/local/share/keyring/devkitpro-pub.gpg] https://apt.devkitpro.org stable main" > /etc/apt/sources.list.d/devkitpro.list
+
+# Install devkitPro pacman via apt.
+RUN apt -y update
+RUN ln -s /proc/mounts /etc/mtab
+RUN apt -y install devkitpro-pacman
+
+RUN dkp-pacman -Syyu --noconfirm
+
+RUN dkp-pacman -S --noconfirm wiiu-dev
+# Remove devkit-env, it messes up PATH.
+RUN dkp-pacman -R --noconfirm devkit-env
+# Install the rest of the Wii U packages.
+RUN dkp-pacman -S --noconfirm \
+    dkp-toolchain-vars \
+    ppc-dev \
+    ppc-portlibs \
+    wiiu-portlibs
 
 # SDL is built from the vendored local source (dependencies/all/SDL) by the
-# Makefile, so no separate SDL install is needed here.
+# Makefile, so wiiu-sdl2-libs is not needed here.
 
-ENV PKG_CONFIG_PATH=/opt/devkitpro/portlibs/wiiu/lib/pkgconfig:/opt/devkitpro/portlibs/ppc/lib/pkgconfig
+# Clear pacman cache.
+RUN dkp-pacman --noconfirm -Scc
 
-WORKDIR /app
+ENV DEVKITPRO="/opt/devkitpro"
+ENV DEVKITPPC="$DEVKITPRO/devkitPPC"
+ENV PATH="$PATH:$DEVKITPRO/portlibs/wiiu/bin:$DEVKITPRO/portlibs/ppc/bin:$DEVKITPPC/bin"
+
+WORKDIR /workspace
 CMD ["python3", "scripts/build.py", "all"]
 
