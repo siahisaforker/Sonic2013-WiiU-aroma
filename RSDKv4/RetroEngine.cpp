@@ -770,15 +770,15 @@ void RetroEngine::Run()
 
 #if RETRO_PLATFORM == RETRO_WIIU
     while (running && WiiU_ProcIsRunning()) {
-#if defined(__WUT__) && !defined(RETRO_WIIU_CF_AROMA)
+#if defined(__WUT__)
         // Handle ProcUI messages so the app can release foreground resources
         // (MEM1, foreground bucket, etc.) and respond to exit requests.
         int procStatus = ProcUIProcessMessages(FALSE);
         switch (procStatus) {
             case PROCUI_STATUS_RELEASE_FOREGROUND:
                 // Allow the app to free foreground resources first.
+                // WiiU_OnReleaseForeground() calls ProcUIDrawDoneRelease().
                 WiiU_OnReleaseForeground();
-                ProcUIDrawDoneRelease();
                 break;
             case PROCUI_STATUS_EXITING:
                 // Requesting an exit: give app a chance to clean up and then

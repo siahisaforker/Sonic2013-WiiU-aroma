@@ -118,8 +118,8 @@ void FileSkip(int count);
 
 inline size_t FillFileBuffer()
 {
-    if (readPos + 0x2000 <= fileSize)
-        readSize = 0x2000;
+    if (readPos + 0x10000 <= fileSize)
+        readSize = 0x10000;
     else
         readSize = fileSize - readPos;
 

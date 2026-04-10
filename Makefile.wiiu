@@ -42,7 +42,6 @@ CFLAGS_SDL = $(MACHDEP) -O2 -g -ffunction-sections -fdata-sections \
 LIBS := $(SDL_LIB) $(LIBS)
 
 # Ensure WUT (Wii U system) libraries are linked after SDL/system libs
-# so symbols like GX2*, OS* and WHB* are resolved.
 LIBS += -lwut
 
 # Fallback: ensure basic SDL libs are linked if pkg-config didn't find them
@@ -113,6 +112,7 @@ SOURCES = \
           RSDKv4/NativeObjects/VirtualDPadM.cpp \
           RSDKv4/NativeObjects/ZoneButton.cpp \
           RSDKv4/Platform/WiiUProc.cpp \
+          RSDKv4/Platform/WiiUForeground.cpp \
           RSDKv4/Platform/WiiUDRC.cpp \
 
 ifneq ($(FORCE_CASE_INSENSITIVE),)
