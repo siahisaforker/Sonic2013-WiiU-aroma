@@ -2,6 +2,7 @@
 
 This repository is a fork of https://gitlab.com/QuarkTheAwesome/sonic2013-wiiu with the goal of improving Aroma compatibility and polishing it.
 
+See license at LICENSE.md 
 ## Highlights
 - Focused fixes and build improvements for Aroma and Wii U runtime behavior
 - Packaging helpers and scripts for creating WUHBs easily
