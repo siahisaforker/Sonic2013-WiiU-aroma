@@ -769,41 +769,33 @@ void RetroEngine::Run()
     Engine.deltaTime      = 0.0f;
 
 #if RETRO_PLATFORM == RETRO_WIIU
+    bool wasInForeground = true;
     while (running && WiiU_ProcIsRunning()) {
 #if defined(__WUT__)
         // Handle ProcUI messages so the app can release foreground resources
         // (MEM1, foreground bucket, etc.) and respond to exit requests.
-        int procStatus = ProcUIProcessMessages(FALSE);
-        switch (procStatus) {
-            case PROCUI_STATUS_RELEASE_FOREGROUND:
-                // Allow the app to free foreground resources first.
-                // WiiU_OnReleaseForeground() calls ProcUIDrawDoneRelease().
-                WiiU_OnReleaseForeground();
-                break;
-            case PROCUI_STATUS_EXITING:
-                // Requesting an exit: give app a chance to clean up and then
-                // shut down ProcUI. Instead of forcing the main loop to stop
-                // immediately, post an SDL_QUIT event so the normal SDL event
-                // handling will observe it and allow the app to exit only
-                // after the SDL_QUIT event is processed.
-                WiiU_OnReleaseForeground();
-                ProcUIShutdown();
-                // devkitPro's ProcUI implementation can be buggy and apps
-                // may not receive an SDL_QUIT event. Ensure SDL gets notified
-                // so SDL-based event loops and cleanup paths run immediately.
+        int procStatus = ProcUIProcessMessages(TRUE);
+        if (procStatus == PROCUI_STATUS_RELEASE_FOREGROUND) {
+            WiiU_OnReleaseForeground();
+            wasInForeground = false;
+            continue;
+        } else if (procStatus == PROCUI_STATUS_EXITING) {
 #if RETRO_USING_SDL1 || RETRO_USING_SDL2
-                {
-                    SDL_Event ev;
-                    SDL_zero(ev);
-                    ev.type = SDL_QUIT;
-                    SDL_PushEvent(&ev);
-                }
+            {
+                SDL_Event ev;
+                SDL_zero(ev);
+                ev.type = SDL_QUIT;
+                SDL_PushEvent(&ev);
+            }
 #endif
-                break;
-            case PROCUI_STATUS_IN_FOREGROUND:
+            break;
+        } else if (procStatus == PROCUI_STATUS_IN_FOREGROUND) {
+            if (!wasInForeground) {
                 WiiU_OnAcquireForeground();
-                break;
-            default: break;
+                wasInForeground = true;
+            }
+        } else if (procStatus == PROCUI_STATUS_IN_BACKGROUND) {
+            continue;
         }
 #endif
 #else
@@ -866,6 +858,9 @@ void RetroEngine::Run()
     }
 
     ReleaseAudioDevice();
+#if RETRO_PLATFORM == RETRO_WIIU
+    if (wasInForeground)
+#endif
     ReleaseRenderDevice();
 #if !RETRO_USE_ORIGINAL_CODE
     ReleaseInputDevices();
@@ -879,7 +874,14 @@ void RetroEngine::Run()
 #endif
 
 #if RETRO_USING_SDL1 || RETRO_USING_SDL2
+#if RETRO_PLATFORM == RETRO_WIIU
+    if (wasInForeground)
+#endif
     SDL_Quit();
+#endif
+
+#if RETRO_PLATFORM == RETRO_WIIU
+    WiiU_ProcShutdown();
 #endif
 }
 

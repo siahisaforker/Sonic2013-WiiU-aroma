@@ -158,7 +158,7 @@ void ProcessStage(void)
             stageMinutes                 = 0;
             stageMode                    = STAGEMODE_NORMAL;
 
-#if RETRO_USE_MOD_LOADER
+#if RETRO_USE_MOD_LOADER && RETRO_PLATFORM != RETRO_WIIU
             for (int m = 0; m < modList.size(); ++m) scanModFolder(&modList[m]);
 #endif
             ResetBackgroundSettings();

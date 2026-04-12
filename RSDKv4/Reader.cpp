@@ -3,6 +3,9 @@
 
 RSDKContainer rsdkContainer;
 
+void* modFileMemoryBuffer = NULL;
+bool allocatedFileMemoryBuffer = false;
+
 char fileName[0x100];
 byte fileBuffer[0x10000];
 int fileSize          = 0;
@@ -19,6 +22,8 @@ byte eStringNo;
 byte eNybbleSwap;
 byte encryptionStringA[0x10];
 byte encryptionStringB[0x10];
+
+byte* packMemoryBuffers[RETRO_PACK_COUNT] = { NULL };
 
 typedef struct {
   FileIO* fileHandle;
@@ -183,12 +188,18 @@ bool LoadFile(const char *filePath, FileInfo *fileInfo)
     }
 
     bool addPath = true;
+    int foundModIndex = -1;
     if (activeMod != -1) {
         char buf[0x100];
         sprintf(buf, "%s", filePathBuf);
-        sprintf(filePathBuf, "%smods/%s/%s", modsPath, modList[activeMod].folder.c_str(), buf);
+        int mLen = StrLength(modsPath);
+        if (mLen >= 5 && StrComp(&modsPath[mLen - 5], "mods/") == 0)
+            sprintf(filePathBuf, "%s%s/%s", modsPath, modList[activeMod].folder.c_str(), buf);
+        else
+            sprintf(filePathBuf, "%smods/%s/%s", modsPath, modList[activeMod].folder.c_str(), buf);
         forceFolder = true;
         addPath     = false;
+        foundModIndex = activeMod;
     }
     else {
         for (int m = 0; m < modList.size(); ++m) {
@@ -198,6 +209,7 @@ bool LoadFile(const char *filePath, FileInfo *fileInfo)
                     StrCopy(filePathBuf, iter->second.c_str());
                     forceFolder = true;
                     addPath     = false;
+                    foundModIndex = m;
                     break;
                 }
             }
@@ -205,10 +217,10 @@ bool LoadFile(const char *filePath, FileInfo *fileInfo)
     }
 #endif
 
-#if RETRO_PLATFORM == RETRO_OSX || RETRO_PLATFORM == RETRO_ANDROID
+#if RETRO_PLATFORM == RETRO_OSX || RETRO_PLATFORM == RETRO_ANDROID || RETRO_PLATFORM == RETRO_WIIU
     if (addPath) {
         char pathBuf[0x100];
-        sprintf(pathBuf, "%s/%s", gamePath, filePathBuf);
+        sprintf(pathBuf, "%s%s", gamePath, filePathBuf);
         sprintf(filePathBuf, "%s", pathBuf);
     }
 #endif
@@ -224,6 +236,13 @@ bool LoadFile(const char *filePath, FileInfo *fileInfo)
         byte buffer[0x10];
         int len = StrLength(fileInfo->fileName);
         GenerateMD5FromString(fileInfo->fileName, len, buffer);
+        
+#if !RETRO_USE_ORIGINAL_CODE
+        modFileMemoryBuffer = NULL;
+        fileInfo->modMemoryBuffer = NULL;
+        allocatedFileMemoryBuffer = false;
+        fileInfo->bufferAllocated = false;
+#endif
 
         for (int f = 0; f < rsdkContainer.fileCount; ++f) {
             RSDKFileInfo *file = &rsdkContainer.files[f];
@@ -243,6 +262,15 @@ bool LoadFile(const char *filePath, FileInfo *fileInfo)
               cHandles[packID].fileHandle = fOpen(rsdkContainer.packNames[packID], "rb");
               fSeek(cHandles[packID].fileHandle, 0, SEEK_END);
               cHandles[packID].fileSize = (int)fTell(cHandles[packID].fileHandle);
+              fSeek(cHandles[packID].fileHandle, 0, SEEK_SET);
+
+              if (packID < RETRO_PACK_COUNT && !packMemoryBuffers[packID]) {
+                  packMemoryBuffers[packID] = (byte*)malloc(cHandles[packID].fileSize);
+                  if (packMemoryBuffers[packID]) {
+                      fRead(packMemoryBuffers[packID], 1, cHandles[packID].fileSize, cHandles[packID].fileHandle);
+                      printLog("Cached DataPack %d into RAM (%d bytes)", packID, cHandles[packID].fileSize);
+                  }
+              }
             }
             cFileHandle = cHandles[packID].fileHandle;
             cFileHandleCanClose = false;
@@ -295,17 +323,95 @@ bool LoadFile(const char *filePath, FileInfo *fileInfo)
         StrCopy(fileInfo->fileName, filePathBuf);
         StrCopy(fileName, fileInfo->fileName);
 
-        cFileHandle = fOpen(fileInfo->fileName, "rb");
+        int knownFileSize = -1;
+        void* knownFileBuffer = NULL;
+
+#if RETRO_USE_MOD_LOADER
+        if (foundModIndex != -1) {
+            auto memIter = modList[foundModIndex].memoryMap.find(pathLower);
+            if (memIter != modList[foundModIndex].memoryMap.end()) {
+                knownFileBuffer = memIter->second.data;
+                knownFileSize = memIter->second.size;
+                cFileHandle = NULL;
+            } else {
+                FILE* disk_f = fopen(fileInfo->fileName, "rb");
+                if (disk_f) {
+                    fseek(disk_f, 0, SEEK_END);
+                    long sz = ftell(disk_f);
+                    fseek(disk_f, 0, SEEK_SET);
+                    if (sz > 0) {
+                        void* mem = malloc(sz);
+                        if (mem) {
+                            fread(mem, 1, sz, disk_f);
+                            ModMemoryBuffer mBuf;
+                            mBuf.data = mem;
+                            mBuf.size = sz;
+                            modList[foundModIndex].memoryMap[pathLower] = mBuf;
+                            fclose(disk_f);
+                            knownFileBuffer = mem;
+                            knownFileSize = sz;
+                            cFileHandle = NULL;
+                        } else {
+                            cFileHandle = disk_f;
+                        }
+                    } else {
+                        cFileHandle = disk_f;
+                    }
+                } else {
+                    cFileHandle = NULL;
+                }
+            }
+        } else {
+#endif
+            cFileHandle = fOpen(fileInfo->fileName, "rb");
+#if RETRO_USE_MOD_LOADER
+        }
+#endif
         cFileHandleCanClose = true;
-        if (!cFileHandle) {
+        if (!cFileHandle && knownFileBuffer == NULL) {
             printLog("Couldn't load file '%s'", filePath);
             return false;
         }
         virtualFileOffset = 0;
-        fSeek(cFileHandle, 0, SEEK_END);
-        fileInfo->fileSize = (int)fTell(cFileHandle);
+        
+        modFileMemoryBuffer = knownFileBuffer;
+        fileInfo->modMemoryBuffer = knownFileBuffer;
+
+        if (knownFileSize != -1) {
+            fileInfo->fileSize = knownFileSize;
+#if !RETRO_USE_ORIGINAL_CODE
+            allocatedFileMemoryBuffer = false;
+            fileInfo->bufferAllocated = false;
+#endif
+        } else if (cFileHandle) {
+            fSeek(cFileHandle, 0, SEEK_END);
+            fileInfo->fileSize = (int)fTell(cFileHandle);
+            fSeek(cFileHandle, 0, SEEK_SET);
+#if !RETRO_USE_ORIGINAL_CODE
+            if (fileInfo->fileSize > 0) {
+                void* mem = malloc(fileInfo->fileSize);
+                if (mem) {
+                    fRead(mem, 1, fileInfo->fileSize, cFileHandle);
+                    modFileMemoryBuffer = mem;
+                    fileInfo->modMemoryBuffer = mem;
+                    allocatedFileMemoryBuffer = true;
+                    fileInfo->bufferAllocated = true;
+                    fClose(cFileHandle);
+                    cFileHandle = NULL;
+                    cFileHandleCanClose = false;
+                    printLog("Cached loose file into RAM (%d bytes)", fileInfo->fileSize);
+                } else {
+                    allocatedFileMemoryBuffer = false;
+                    fileInfo->bufferAllocated = false;
+                }
+            } else {
+                allocatedFileMemoryBuffer = false;
+                fileInfo->bufferAllocated = false;
+            }
+#endif
+        }
+        
         fileSize = fileInfo->vfileSize = fileInfo->fileSize;
-        fSeek(cFileHandle, 0, SEEK_SET);
         readPos           = 0;
         fileInfo->readPos = readPos;
         packID = fileInfo->packID = -1;
@@ -507,6 +613,11 @@ void GetFileInfo(FileInfo *fileInfo)
     fileInfo->useEncryption     = useEncryption;
     fileInfo->packID            = packID;
     fileInfo->usingDataPack     = Engine.usingDataFile;
+#if !RETRO_USE_ORIGINAL_CODE
+    fileInfo->modMemoryBuffer   = modFileMemoryBuffer;
+    fileInfo->cFileHandle       = cFileHandle;
+    fileInfo->bufferAllocated   = allocatedFileMemoryBuffer;
+#endif
     memcpy(encryptionStringA, fileInfo->encryptionStringA, 0x10 * sizeof(byte));
     memcpy(encryptionStringB, fileInfo->encryptionStringB, 0x10 * sizeof(byte));
 }
@@ -523,6 +634,15 @@ void SetFileInfo(FileInfo *fileInfo)
           cHandles[packID].fileHandle = fOpen(rsdkContainer.packNames[packID], "rb");
           fSeek(cHandles[packID].fileHandle, 0, SEEK_END);
           cHandles[packID].fileSize = (int)fTell(cHandles[packID].fileHandle);
+          fSeek(cHandles[packID].fileHandle, 0, SEEK_SET);
+
+          if (packID < RETRO_PACK_COUNT && !packMemoryBuffers[packID]) {
+              packMemoryBuffers[packID] = (byte*)malloc(cHandles[packID].fileSize);
+              if (packMemoryBuffers[packID]) {
+                  fRead(packMemoryBuffers[packID], 1, cHandles[packID].fileSize, cHandles[packID].fileHandle);
+                  printLog("Cached DataPack %d into RAM (%d bytes)", packID, cHandles[packID].fileSize);
+              }
+          }
         }
         cFileHandle = cHandles[packID].fileHandle;
         cFileHandleCanClose = false;
@@ -531,7 +651,7 @@ void SetFileInfo(FileInfo *fileInfo)
         virtualFileOffset = fileInfo->virtualFileOffset;
         vFileSize         = fileInfo->vfileSize;
         readPos  = fileInfo->readPos;
-        fSeek(cFileHandle, readPos, SEEK_SET);
+        if (cFileHandle) fSeek(cFileHandle, readPos, SEEK_SET);
         FillFileBuffer();
         bufferPosition       = fileInfo->bufferPosition;
         eStringPosA          = fileInfo->eStringPosA;
@@ -544,14 +664,25 @@ void SetFileInfo(FileInfo *fileInfo)
         if (useEncryption) {
             GenerateELoadKeys(vFileSize, (vFileSize >> 1) + 1);
         }
+#if !RETRO_USE_ORIGINAL_CODE
+        modFileMemoryBuffer = NULL;
+        allocatedFileMemoryBuffer = false;
+#endif
     }
     else {
         StrCopy(fileName, fileInfo->fileName);
+#if !RETRO_USE_ORIGINAL_CODE
+        modFileMemoryBuffer = fileInfo->modMemoryBuffer;
+        cFileHandle       = fileInfo->cFileHandle;
+        allocatedFileMemoryBuffer = fileInfo->bufferAllocated;
+        if (!cFileHandle && !modFileMemoryBuffer) cFileHandle = fOpen(fileInfo->fileName, "rb");
+#else
         cFileHandle       = fOpen(fileInfo->fileName, "rb");
+#endif
         virtualFileOffset = 0;
         fileSize          = fileInfo->fileSize;
         readPos           = fileInfo->readPos;
-        fSeek(cFileHandle, readPos, SEEK_SET);
+        if (cFileHandle) fSeek(cFileHandle, readPos, SEEK_SET);
         FillFileBuffer();
         bufferPosition       = fileInfo->bufferPosition;
         eStringPosA          = 0;
@@ -629,7 +760,7 @@ void SetFilePosition(int newPos)
         else
             readPos = newPos;
     }
-    fSeek(cFileHandle, readPos, SEEK_SET);
+    if (cFileHandle) fSeek(cFileHandle, readPos, SEEK_SET);
     FillFileBuffer();
 }
 

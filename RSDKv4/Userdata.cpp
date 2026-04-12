@@ -1177,9 +1177,6 @@ void ShowWebsite(int websiteID)
 
 void ExitGame() {
     Engine.running = false;
-#if RETRO_PLATFORM == RETRO_WIIU
-    WiiU_ProcShutdown();
-#endif
 }
 
 void FileExists(int *unused, const char *filePath)

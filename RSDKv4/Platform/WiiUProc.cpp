@@ -16,11 +16,7 @@ void WiiU_ProcInit() {
 void WiiU_ProcShutdown() { ProcUIShutdown(); }
 bool WiiU_ProcIsRunning() { return ProcUIIsRunning() && !ProcUIInShutdown(); }
 
-#if 0 // unified above
-#endif // 0
-
 #else
-// WHB fallback (older toolchains)
 #include <whb/proc.h>
 
 void WiiU_ProcInit() { WHBProcInit(); }
@@ -29,14 +25,10 @@ bool WiiU_ProcIsRunning() { return WHBProcIsRunning(); }
 
 #endif
 
-// Weak foreground handler stubs – overridden by WiiUForeground.cpp when it
-// is part of the build.  Kept here so the link succeeds even without that
-// translation unit.
 extern "C" __attribute__((weak)) void WiiU_OnReleaseForeground() { }
 extern "C" __attribute__((weak)) void WiiU_OnAcquireForeground() { }
 
 #else
-// Non-WiiU platforms: no-op
 void WiiU_ProcInit() { }
 void WiiU_ProcShutdown() { }
 bool WiiU_ProcIsRunning() { return true; }

@@ -5,9 +5,15 @@
 #include <string>
 #include <map>
 #include <unordered_map>
+#include <vector>
 #include <tinyxml2.h>
 
 #define PLAYER_MAX (0x10)
+
+struct ModMemoryBuffer {
+    void* data;
+    size_t size;
+};
 
 struct ModInfo {
     std::string name;
@@ -15,6 +21,7 @@ struct ModInfo {
     std::string author;
     std::string version;
     std::map<std::string, std::string> fileMap;
+    std::map<std::string, ModMemoryBuffer> memoryMap;
     std::string folder;
     bool useScripts;
     bool skipStartMenu;

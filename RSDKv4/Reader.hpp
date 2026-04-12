@@ -34,8 +34,13 @@ struct FileInfo {
 #if !RETRO_USE_ORIGINAL_CODE
     FileIO *cFileHandle;
     bool usingDataPack;
+    void* modMemoryBuffer;
+    bool bufferAllocated;
 #endif
 };
+
+extern void* modFileMemoryBuffer;
+extern bool allocatedFileMemoryBuffer;
 
 struct RSDKFileInfo {
     byte hash[0x10];
@@ -87,10 +92,16 @@ inline void CopyFilePath(char *dest, const char *src)
     }
 }
 bool CheckRSDKFile(const char *filePath);
+extern byte* packMemoryBuffers[RETRO_PACK_COUNT];
+
 inline void CloseRSDKContainers()
 {
     for (int i = 0; i < 4; ++i) {
         strcpy(rsdkContainer.packNames[i], "");
+        if (packMemoryBuffers[i]) {
+            free(packMemoryBuffers[i]);
+            packMemoryBuffers[i] = NULL;
+        }
     }
     rsdkContainer.packCount = 0;
     rsdkContainer.fileCount = 0;
@@ -106,6 +117,14 @@ inline bool CloseFile()
     int result = 0;
     if (cFileHandle && cFileHandleCanClose)
         result = fClose(cFileHandle);
+
+#if !RETRO_USE_ORIGINAL_CODE
+    if (allocatedFileMemoryBuffer && modFileMemoryBuffer) {
+        free(modFileMemoryBuffer);
+    }
+    modFileMemoryBuffer = NULL;
+    allocatedFileMemoryBuffer = false;
+#endif
 
     cFileHandle = NULL;
     return result;
@@ -123,7 +142,19 @@ inline size_t FillFileBuffer()
     else
         readSize = fileSize - readPos;
 
-    size_t result = fRead(fileBuffer, 1u, readSize, cFileHandle);
+    size_t result = 0;
+#if !RETRO_USE_ORIGINAL_CODE
+    if (modFileMemoryBuffer) {
+        memcpy(fileBuffer, (byte*)modFileMemoryBuffer + readPos, readSize);
+        result = readSize;
+    } else
+#endif
+    if (packID < RETRO_PACK_COUNT && packMemoryBuffers[packID]) {
+        memcpy(fileBuffer, packMemoryBuffers[packID] + readPos, readSize);
+        result = readSize;
+    } else {
+        result = fRead(fileBuffer, 1u, readSize, cFileHandle);
+    }
     readPos += readSize;
     bufferPosition = 0;
     return result;

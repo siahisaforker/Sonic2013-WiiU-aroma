@@ -7,7 +7,7 @@ int taListStore = 0;
 
 void initDevMenu()
 {
-#if RETRO_USE_MOD_LOADER
+#if RETRO_USE_MOD_LOADER && RETRO_PLATFORM != RETRO_WIIU
     for (int m = 0; m < modList.size(); ++m) scanModFolder(&modList[m]);
 #endif
     // DrawStageGFXHQ = 0;
