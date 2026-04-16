@@ -15,4 +15,4 @@ current known issues:
 
 Pause softlocking the whole game on unmodded - currently figuring out how to fix it
 
-TODO: Add pro controller and other wii controllers support
+I'm pretty sure this is actually the last issue I have to fix...
