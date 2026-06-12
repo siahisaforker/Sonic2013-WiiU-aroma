@@ -1,4 +1,5 @@
 #include "RetroEngine.hpp"
+#include <map>
 #include <string>
 
 RSDKContainer rsdkContainer;
@@ -16,6 +17,7 @@ int bufferPosition    = 0;
 int virtualFileOffset = 0;
 bool useEncryption    = false;
 byte packID           = 0;
+bool cFileUsingDataPack = false;
 byte eStringPosA;
 byte eStringPosB;
 byte eStringNo;
@@ -31,8 +33,138 @@ typedef struct {
 } CacheFileHandle;
 static CacheFileHandle cHandles[255] = { 0 };
 
+typedef struct {
+    byte *data;
+    int size;
+} CachedLooseFile;
+
+static std::map<std::string, CachedLooseFile> looseFileCache;
+
 FileIO *cFileHandle = nullptr;
 bool cFileHandleCanClose = false;
+
+static void CloseCurrentFileHandle()
+{
+    if (cFileHandle && cFileHandleCanClose)
+        fClose(cFileHandle);
+    cFileHandle = NULL;
+    cFileHandleCanClose = false;
+}
+
+static bool CacheDataPack(byte id)
+{
+    if (id >= RETRO_PACK_COUNT)
+        return false;
+
+    if (packMemoryBuffers[id])
+        return cHandles[id].fileSize > 0;
+
+    FileIO *packFile = fOpen(rsdkContainer.packNames[id], "rb");
+    if (!packFile) {
+        printLog("Failed to open DataPack %d for RAM cache", id);
+        return false;
+    }
+
+    fSeek(packFile, 0, SEEK_END);
+    int packSize = (int)fTell(packFile);
+    fSeek(packFile, 0, SEEK_SET);
+    if (packSize <= 0) {
+        fClose(packFile);
+        printLog("DataPack %d has invalid size %d", id, packSize);
+        return false;
+    }
+
+    byte *packBuffer = (byte *)malloc(packSize);
+    if (!packBuffer) {
+        fClose(packFile);
+        printLog("Failed to allocate DataPack %d RAM cache (%d bytes)", id, packSize);
+        return false;
+    }
+
+    size_t bytesRead = fRead(packBuffer, 1, packSize, packFile);
+    fClose(packFile);
+
+    if (bytesRead != (size_t)packSize) {
+        free(packBuffer);
+        printLog("Failed to read DataPack %d into RAM (%d/%d bytes)", id, (int)bytesRead, packSize);
+        return false;
+    }
+
+    packMemoryBuffers[id] = packBuffer;
+    cHandles[id].fileHandle = NULL;
+    cHandles[id].fileSize = packSize;
+    printLog("Cached DataPack %d into RAM (%d bytes)", id, packSize);
+    return true;
+}
+
+static CachedLooseFile *FindCachedLooseFile(const char *path)
+{
+    std::map<std::string, CachedLooseFile>::iterator it = looseFileCache.find(path);
+    if (it == looseFileCache.end())
+        return NULL;
+    return &it->second;
+}
+
+static CachedLooseFile *CacheLooseFile(const char *path, FileIO *fileHandle, int looseFileSize)
+{
+    CachedLooseFile cachedFile = { NULL, looseFileSize };
+
+    if (looseFileSize > 0) {
+        cachedFile.data = (byte *)malloc(looseFileSize);
+        if (!cachedFile.data) {
+            printLog("Failed to allocate loose file RAM cache '%s' (%d bytes)", path, looseFileSize);
+            return NULL;
+        }
+
+        size_t bytesRead = fRead(cachedFile.data, 1, looseFileSize, fileHandle);
+        if (bytesRead != (size_t)looseFileSize) {
+            free(cachedFile.data);
+            printLog("Failed to read loose file into RAM '%s' (%d/%d bytes)", path, (int)bytesRead, looseFileSize);
+            return NULL;
+        }
+    }
+
+    std::map<std::string, CachedLooseFile>::iterator inserted = looseFileCache.insert(std::make_pair(std::string(path), cachedFile)).first;
+    printLog("Cached loose file into RAM '%s' (%d bytes)", path, looseFileSize);
+    return &inserted->second;
+}
+
+void CloseRSDKContainers()
+{
+    CloseCurrentFileHandle();
+
+#if !RETRO_USE_ORIGINAL_CODE
+    modFileMemoryBuffer = NULL;
+    allocatedFileMemoryBuffer = false;
+#endif
+
+    for (int i = 0; i < RETRO_PACK_COUNT; ++i) {
+        strcpy(rsdkContainer.packNames[i], "");
+        if (packMemoryBuffers[i]) {
+            free(packMemoryBuffers[i]);
+            packMemoryBuffers[i] = NULL;
+        }
+    }
+
+    for (std::map<std::string, CachedLooseFile>::iterator it = looseFileCache.begin(); it != looseFileCache.end(); ++it) {
+        free(it->second.data);
+    }
+    looseFileCache.clear();
+
+#if RETRO_USE_MOD_LOADER
+    for (int m = 0; m < (int)modList.size(); ++m) {
+        for (std::map<std::string, ModMemoryBuffer>::iterator it = modList[m].memoryMap.begin(); it != modList[m].memoryMap.end(); ++it) {
+            free(it->second.data);
+        }
+        modList[m].memoryMap.clear();
+    }
+#endif
+
+    memset(cHandles, 0, sizeof(cHandles));
+    rsdkContainer.packCount = 0;
+    rsdkContainer.fileCount = 0;
+    cFileUsingDataPack = false;
+}
 
 bool CheckRSDKFile(const char *filePath)
 {
@@ -53,8 +185,10 @@ bool CheckRSDKFile(const char *filePath)
         byte buf          = 0;
         for (int i = 0; i < 6; ++i) {
             fRead(&buf, 1, 1, cFileHandle);
-            if (buf != signature[i])
+            if (buf != signature[i]) {
+                CloseCurrentFileHandle();
                 return false;
+            }
         }
 
         Engine.usingDataFile = true;
@@ -86,8 +220,7 @@ bool CheckRSDKFile(const char *filePath)
             rsdkContainer.fileCount++;
         }
 
-        fClose(cFileHandle);
-        cFileHandle = NULL;
+        CloseCurrentFileHandle();
         if (LoadFile("Bytecode/GlobalCode.bin", &info)) {
             Engine.usingBytecode = true;
             CloseFile();
@@ -173,8 +306,12 @@ bool LoadFile(const char *filePath, FileInfo *fileInfo)
 {
     MEM_ZEROP(fileInfo);
 
-    if (cFileHandle && cFileHandleCanClose)
-        fClose(cFileHandle);
+    CloseCurrentFileHandle();
+    cFileUsingDataPack = false;
+#if !RETRO_USE_ORIGINAL_CODE
+    modFileMemoryBuffer = NULL;
+    allocatedFileMemoryBuffer = false;
+#endif
 
     char filePathBuf[0x100];
     StrCopy(filePathBuf, filePath);
@@ -258,22 +395,13 @@ bool LoadFile(const char *filePath, FileInfo *fileInfo)
                 continue;
 
             packID      = file->packID;
-            if (!cHandles[packID].fileHandle) {
-              cHandles[packID].fileHandle = fOpen(rsdkContainer.packNames[packID], "rb");
-              fSeek(cHandles[packID].fileHandle, 0, SEEK_END);
-              cHandles[packID].fileSize = (int)fTell(cHandles[packID].fileHandle);
-              fSeek(cHandles[packID].fileHandle, 0, SEEK_SET);
-
-              if (packID < RETRO_PACK_COUNT && !packMemoryBuffers[packID]) {
-                  packMemoryBuffers[packID] = (byte*)malloc(cHandles[packID].fileSize);
-                  if (packMemoryBuffers[packID]) {
-                      fRead(packMemoryBuffers[packID], 1, cHandles[packID].fileSize, cHandles[packID].fileHandle);
-                      printLog("Cached DataPack %d into RAM (%d bytes)", packID, cHandles[packID].fileSize);
-                  }
-              }
+            if (!CacheDataPack(packID)) {
+                printLog("Couldn't cache datapack for '%s'", filePath);
+                return false;
             }
-            cFileHandle = cHandles[packID].fileHandle;
+            cFileHandle = NULL;
             cFileHandleCanClose = false;
+            cFileUsingDataPack = true;
             fileSize = cHandles[packID].fileSize;
 
             vFileSize         = file->filesize;
@@ -281,7 +409,6 @@ bool LoadFile(const char *filePath, FileInfo *fileInfo)
             readPos           = file->offset;
             readSize          = 0;
             bufferPosition    = 0;
-            fSeek(cFileHandle, virtualFileOffset, SEEK_SET);
 
             useEncryption = file->encrypted;
             memset(fileInfo->encryptionStringA, 0, 0x10 * sizeof(byte));
@@ -342,20 +469,33 @@ bool LoadFile(const char *filePath, FileInfo *fileInfo)
                     if (sz > 0) {
                         void* mem = malloc(sz);
                         if (mem) {
-                            fread(mem, 1, sz, disk_f);
-                            ModMemoryBuffer mBuf;
-                            mBuf.data = mem;
-                            mBuf.size = sz;
-                            modList[foundModIndex].memoryMap[pathLower] = mBuf;
+                            size_t bytesRead = fread(mem, 1, sz, disk_f);
                             fclose(disk_f);
-                            knownFileBuffer = mem;
-                            knownFileSize = sz;
-                            cFileHandle = NULL;
+                            if (bytesRead == (size_t)sz) {
+                                ModMemoryBuffer mBuf;
+                                mBuf.data = mem;
+                                mBuf.size = sz;
+                                modList[foundModIndex].memoryMap[pathLower] = mBuf;
+                                knownFileBuffer = mem;
+                                knownFileSize = sz;
+                                cFileHandle = NULL;
+                                printLog("Cached mod file into RAM '%s' (%ld bytes)", fileInfo->fileName, sz);
+                            }
+                            else {
+                                free(mem);
+                                printLog("Couldn't fully cache mod file '%s'", fileInfo->fileName);
+                                cFileHandle = NULL;
+                            }
                         } else {
-                            cFileHandle = disk_f;
+                            fclose(disk_f);
+                            cFileHandle = NULL;
+                            printLog("Couldn't allocate mod file RAM cache '%s' (%ld bytes)", fileInfo->fileName, sz);
                         }
                     } else {
-                        cFileHandle = disk_f;
+                        fclose(disk_f);
+                        knownFileBuffer = NULL;
+                        knownFileSize = 0;
+                        cFileHandle = NULL;
                     }
                 } else {
                     cFileHandle = NULL;
@@ -363,12 +503,20 @@ bool LoadFile(const char *filePath, FileInfo *fileInfo)
             }
         } else {
 #endif
-            cFileHandle = fOpen(fileInfo->fileName, "rb");
+            CachedLooseFile *cachedLooseFile = FindCachedLooseFile(fileInfo->fileName);
+            if (cachedLooseFile) {
+                knownFileBuffer = cachedLooseFile->data;
+                knownFileSize = cachedLooseFile->size;
+                cFileHandle = NULL;
+            }
+            else {
+                cFileHandle = fOpen(fileInfo->fileName, "rb");
+            }
 #if RETRO_USE_MOD_LOADER
         }
 #endif
         cFileHandleCanClose = true;
-        if (!cFileHandle && knownFileBuffer == NULL) {
+        if (!cFileHandle && knownFileSize < 0) {
             printLog("Couldn't load file '%s'", filePath);
             return false;
         }
@@ -388,26 +536,18 @@ bool LoadFile(const char *filePath, FileInfo *fileInfo)
             fileInfo->fileSize = (int)fTell(cFileHandle);
             fSeek(cFileHandle, 0, SEEK_SET);
 #if !RETRO_USE_ORIGINAL_CODE
-            if (fileInfo->fileSize > 0) {
-                void* mem = malloc(fileInfo->fileSize);
-                if (mem) {
-                    fRead(mem, 1, fileInfo->fileSize, cFileHandle);
-                    modFileMemoryBuffer = mem;
-                    fileInfo->modMemoryBuffer = mem;
-                    allocatedFileMemoryBuffer = true;
-                    fileInfo->bufferAllocated = true;
-                    fClose(cFileHandle);
-                    cFileHandle = NULL;
-                    cFileHandleCanClose = false;
-                    printLog("Cached loose file into RAM (%d bytes)", fileInfo->fileSize);
-                } else {
-                    allocatedFileMemoryBuffer = false;
-                    fileInfo->bufferAllocated = false;
-                }
-            } else {
-                allocatedFileMemoryBuffer = false;
-                fileInfo->bufferAllocated = false;
+            CachedLooseFile *cachedLooseFile = CacheLooseFile(fileInfo->fileName, cFileHandle, fileInfo->fileSize);
+            fClose(cFileHandle);
+            cFileHandle = NULL;
+            cFileHandleCanClose = false;
+            if (!cachedLooseFile) {
+                printLog("Couldn't cache loose file '%s'", filePath);
+                return false;
             }
+            modFileMemoryBuffer = cachedLooseFile->data;
+            fileInfo->modMemoryBuffer = cachedLooseFile->data;
+            allocatedFileMemoryBuffer = false;
+            fileInfo->bufferAllocated = false;
 #endif
         }
         
@@ -415,6 +555,7 @@ bool LoadFile(const char *filePath, FileInfo *fileInfo)
         readPos           = 0;
         fileInfo->readPos = readPos;
         packID = fileInfo->packID = -1;
+        cFileUsingDataPack = false;
         fileInfo->usingDataPack   = false;
         bufferPosition            = 0;
         readSize                  = 0;
@@ -471,8 +612,8 @@ void FileRead(void *dest, int size)
     if (readPos <= fileSize) {
         if (useEncryption) {
             while (size > 0) {
-                if (bufferPosition == readSize)
-                    FillFileBuffer();
+                if (bufferPosition == readSize && !FillFileBuffer())
+                    break;
 
                 *data = encryptionStringB[eStringPosB] ^ eStringNo ^ fileBuffer[bufferPosition++];
                 if (eNybbleSwap)
@@ -525,8 +666,8 @@ void FileRead(void *dest, int size)
         }
         else {
             while (size > 0) {
-                if (bufferPosition == readSize)
-                    FillFileBuffer();
+                if (bufferPosition == readSize && !FillFileBuffer())
+                    break;
 
                 *data++ = fileBuffer[bufferPosition++];
                 size--;
@@ -540,8 +681,8 @@ void FileSkip(int count)
     if (readPos <= fileSize) {
         if (useEncryption) {
             while (count > 0) {
-                if (bufferPosition == readSize)
-                    FillFileBuffer();
+                if (bufferPosition == readSize && !FillFileBuffer())
+                    break;
                 bufferPosition++;
 
                 ++eStringPosA;
@@ -589,8 +730,8 @@ void FileSkip(int count)
         }
         else {
             while (count > 0) {
-                if (bufferPosition == readSize)
-                    FillFileBuffer();
+                if (bufferPosition == readSize && !FillFileBuffer())
+                    break;
                 bufferPosition++;
                 count--;
             }
@@ -612,14 +753,14 @@ void GetFileInfo(FileInfo *fileInfo)
     fileInfo->eNybbleSwap       = eNybbleSwap;
     fileInfo->useEncryption     = useEncryption;
     fileInfo->packID            = packID;
-    fileInfo->usingDataPack     = Engine.usingDataFile;
+    fileInfo->usingDataPack     = cFileUsingDataPack;
 #if !RETRO_USE_ORIGINAL_CODE
     fileInfo->modMemoryBuffer   = modFileMemoryBuffer;
     fileInfo->cFileHandle       = cFileHandle;
     fileInfo->bufferAllocated   = allocatedFileMemoryBuffer;
 #endif
-    memcpy(encryptionStringA, fileInfo->encryptionStringA, 0x10 * sizeof(byte));
-    memcpy(encryptionStringB, fileInfo->encryptionStringB, 0x10 * sizeof(byte));
+    memcpy(fileInfo->encryptionStringA, encryptionStringA, 0x10 * sizeof(byte));
+    memcpy(fileInfo->encryptionStringB, encryptionStringB, 0x10 * sizeof(byte));
 }
 
 void SetFileInfo(FileInfo *fileInfo)
@@ -630,28 +771,18 @@ void SetFileInfo(FileInfo *fileInfo)
     if (Engine.usingDataFile) {
 #endif
         packID               = fileInfo->packID;
-        if (!cHandles[packID].fileHandle) {
-          cHandles[packID].fileHandle = fOpen(rsdkContainer.packNames[packID], "rb");
-          fSeek(cHandles[packID].fileHandle, 0, SEEK_END);
-          cHandles[packID].fileSize = (int)fTell(cHandles[packID].fileHandle);
-          fSeek(cHandles[packID].fileHandle, 0, SEEK_SET);
-
-          if (packID < RETRO_PACK_COUNT && !packMemoryBuffers[packID]) {
-              packMemoryBuffers[packID] = (byte*)malloc(cHandles[packID].fileSize);
-              if (packMemoryBuffers[packID]) {
-                  fRead(packMemoryBuffers[packID], 1, cHandles[packID].fileSize, cHandles[packID].fileHandle);
-                  printLog("Cached DataPack %d into RAM (%d bytes)", packID, cHandles[packID].fileSize);
-              }
-          }
+        if (!CacheDataPack(packID)) {
+            printLog("Couldn't restore datapack cache for '%s'", fileInfo->fileName);
+            return;
         }
-        cFileHandle = cHandles[packID].fileHandle;
+        cFileHandle = NULL;
         cFileHandleCanClose = false;
+        cFileUsingDataPack = true;
         fileSize = cHandles[packID].fileSize;
 
         virtualFileOffset = fileInfo->virtualFileOffset;
         vFileSize         = fileInfo->vfileSize;
         readPos  = fileInfo->readPos;
-        if (cFileHandle) fSeek(cFileHandle, readPos, SEEK_SET);
         FillFileBuffer();
         bufferPosition       = fileInfo->bufferPosition;
         eStringPosA          = fileInfo->eStringPosA;
@@ -670,15 +801,22 @@ void SetFileInfo(FileInfo *fileInfo)
 #endif
     }
     else {
+        CloseCurrentFileHandle();
+        cFileUsingDataPack = false;
         StrCopy(fileName, fileInfo->fileName);
 #if !RETRO_USE_ORIGINAL_CODE
         modFileMemoryBuffer = fileInfo->modMemoryBuffer;
         cFileHandle       = fileInfo->cFileHandle;
         allocatedFileMemoryBuffer = fileInfo->bufferAllocated;
-        if (!cFileHandle && !modFileMemoryBuffer) cFileHandle = fOpen(fileInfo->fileName, "rb");
+        if (!cFileHandle && !modFileMemoryBuffer) {
+            CachedLooseFile *cachedLooseFile = FindCachedLooseFile(fileInfo->fileName);
+            if (cachedLooseFile)
+                modFileMemoryBuffer = cachedLooseFile->data;
+        }
 #else
         cFileHandle       = fOpen(fileInfo->fileName, "rb");
 #endif
+        cFileHandleCanClose = cFileHandle != NULL;
         virtualFileOffset = 0;
         fileSize          = fileInfo->fileSize;
         readPos           = fileInfo->readPos;
@@ -697,7 +835,7 @@ void SetFileInfo(FileInfo *fileInfo)
 
 size_t GetFilePosition()
 {
-    if (Engine.usingDataFile)
+    if (cFileUsingDataPack)
         return bufferPosition + readPos - readSize - virtualFileOffset;
     else
         return bufferPosition + readPos - readSize;
@@ -755,7 +893,7 @@ void SetFilePosition(int newPos)
         }
     }
     else {
-        if (Engine.usingDataFile)
+        if (cFileUsingDataPack)
             readPos = virtualFileOffset + newPos;
         else
             readPos = newPos;
@@ -766,7 +904,7 @@ void SetFilePosition(int newPos)
 
 bool ReachedEndOfFile()
 {
-    if (Engine.usingDataFile)
+    if (cFileUsingDataPack)
         return bufferPosition + readPos - readSize - virtualFileOffset >= vFileSize;
     else
         return bufferPosition + readPos - readSize >= fileSize;

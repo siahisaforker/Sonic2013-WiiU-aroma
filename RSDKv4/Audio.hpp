@@ -98,6 +98,8 @@ extern SDL_AudioSpec audioDeviceFormat;
 #endif
 
 int InitAudioPlayback();
+void CloseAudioPlaybackDevice();
+void ReopenAudioPlaybackDevice();
 void LoadGlobalSfx();
 
 #if RETRO_USING_SDL1 || RETRO_USING_SDL2
@@ -119,9 +121,9 @@ inline void freeMusInfo()
     streamInfo[currentStreamIndex].stream = NULL;
 #endif
     ov_clear(&streamInfo[currentStreamIndex].vorbisFile);
-#if RETRO_USING_SDL2
-    streamInfo[currentStreamIndex].stream = nullptr;
-#endif
+    streamInfo[currentStreamIndex].loaded = false;
+    streamFile[currentStreamIndex].fileSize = 0;
+    streamFile[currentStreamIndex].filePos = 0;
 
     SDL_UnlockAudio();
 }
@@ -295,6 +297,7 @@ inline void ReleaseAudioDevice()
 {
     StopMusic(true);
     StopAllSfx();
+    CloseAudioPlaybackDevice();
     ReleaseStageSfx();
     ReleaseGlobalSfx();
 }

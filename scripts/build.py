@@ -7,6 +7,7 @@ import argparse
 import datetime
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,9 @@ ICON_DIR = ROOT_DIR / "icon"
 MOD_DIR = ROOT_DIR / "mod"
 BIN_DIR = ROOT_DIR / "bin"
 DEFAULT_OUT = ROOT_DIR / "out"
+S3AIR_PLUS_ROOT = Path(r"C:\Users\josiah\Music\sonic3air-plus-wiiu\sonic3air-plus-wiiu")
+DEFAULT_BOOT_SOUND = S3AIR_PLUS_ROOT / "assets" / "wiiu" / "boot.btsnd"
+DEFAULT_BOOT_SOUND_INJECTOR = S3AIR_PLUS_ROOT / "tools" / "wiiu_inject_wuhb_bootsound.py"
 # Common locations to check for devkitPro if DEVKITPRO env var is not set
 DEVKITPRO_CANDIDATES = [
     "/opt/devkitpro",
@@ -49,6 +53,14 @@ def find_devkitpro() -> str:
     return ""
 
 
+def msys_path(path: Path | str) -> str:
+    p = Path(path).resolve()
+    text = str(p).replace("\\", "/")
+    if platform.system() == "Windows" and len(text) >= 2 and text[1] == ":":
+        return f"/{text[0].lower()}{text[2:]}"
+    return text
+
+
 def setup_env() -> dict:
     env = os.environ.copy()
     dkp = find_devkitpro()
@@ -71,6 +83,83 @@ def setup_env() -> dict:
 def run(cmd, **kwargs):
     print(f"+ {' '.join(str(c) for c in cmd)}")
     subprocess.check_call(cmd, **kwargs)
+
+
+def run_msys(command: str, env: dict, cwd: Path = ROOT_DIR):
+    dkp = Path(env["DEVKITPRO"]).resolve()
+    bash = dkp / "msys2" / "usr" / "bin" / "bash.exe"
+    if not bash.is_file():
+        sys.exit(f"MSYS2 bash not found under devkitPro: {bash}")
+
+    dkp_msys = msys_path(dkp)
+    path_prefix = ":".join([
+        f"{dkp_msys}/tools/bin",
+        f"{dkp_msys}/devkitPPC/bin",
+        f"{dkp_msys}/msys2/usr/bin",
+    ])
+    script = (
+        f"export DEVKITPRO={shlex.quote(dkp_msys)}; "
+        f"export DEVKITPPC={shlex.quote(dkp_msys + '/devkitPPC')}; "
+        f"export PATH={shlex.quote(path_prefix)}:$PATH; "
+        f"cd {shlex.quote(msys_path(cwd))}; "
+        f"{command}"
+    )
+    run([str(bash), "-lc", script], env=env)
+
+
+def cmake_build_game(choice: str, jobs: int, env: dict):
+    build_dir = ROOT_DIR / "build" / f"wiiu-sonic{choice}"
+    dkp_msys = msys_path(env["DEVKITPRO"])
+    cmake_wrapper = f"{dkp_msys}/portlibs/wiiu/bin/powerpc-eabi-cmake"
+
+    configure = " ".join([
+        shlex.quote(cmake_wrapper),
+        "-S", shlex.quote(msys_path(ROOT_DIR)),
+        "-B", shlex.quote(msys_path(build_dir)),
+        "-G", "Ninja",
+        f"-DPACKAGED_GAME={shlex.quote(choice)}",
+        "-DCMAKE_BUILD_TYPE=Release",
+    ])
+    run_msys(configure, env)
+
+    build = " ".join([
+        "cmake",
+        "--build", shlex.quote(msys_path(build_dir)),
+        "--parallel", str(jobs),
+    ])
+    run_msys(build, env)
+
+    rpx = BIN_DIR / "RSDKv4.rpx"
+    cmake_rpx = build_dir / "RSDKv4.rpx"
+    if not rpx.is_file() and cmake_rpx.is_file():
+        BIN_DIR.mkdir(exist_ok=True)
+        shutil.copy2(cmake_rpx, rpx)
+    if rpx.is_file():
+        print(f"Built {rpx} ({rpx.stat().st_size} bytes)")
+    else:
+        sys.exit(f"RPX not found after CMake build: {rpx}")
+
+
+def make_build_game(choice: str, jobs: int, env: dict):
+    run(["make", "-f", "Makefile.wiiu", "clean"], cwd=ROOT_DIR, env=env)
+    run(
+        ["make", "-f", "Makefile.wiiu", f"PACKAGED_GAME={choice}", f"-j{jobs}"],
+        cwd=ROOT_DIR,
+        env=env,
+    )
+    rpx = BIN_DIR / "RSDKv4.rpx"
+    if rpx.is_file():
+        print(f"Built {rpx} ({rpx.stat().st_size} bytes)")
+    else:
+        sys.exit(f"RPX not found after build: {rpx}")
+
+
+def build_game(choice: str, jobs: int, env: dict, build_system: str):
+    print(f"\n=== Building RPX ({build_system}, PACKAGED_GAME={choice}) ===")
+    if build_system == "cmake":
+        cmake_build_game(choice, jobs, env)
+    else:
+        make_build_game(choice, jobs, env)
 
 
 def find_icon(choice: str, name: str) -> Path | None:
@@ -104,9 +193,18 @@ def find_wuhbtool(env: dict) -> str:
 
 
 def find_image_tool() -> str:
-    for cmd in ("magick", "convert"):
-        if shutil.which(cmd):
-            return cmd
+    magick = shutil.which("magick")
+    if magick:
+        return magick
+
+    convert = shutil.which("convert")
+    if convert:
+        try:
+            result = subprocess.run([convert, "-version"], capture_output=True, text=True)
+            if "ImageMagick" in (result.stdout + result.stderr):
+                return convert
+        except OSError:
+            pass
     return ""
 
 
@@ -114,7 +212,16 @@ def copy_or_convert(src: Path, dst: Path, size: str, tool: str):
     if tool:
         run([tool, str(src), "-resize", size, str(dst)])
     else:
-        shutil.copy2(src, dst)
+        try:
+            from PIL import Image
+
+            width, height = (int(part) for part in size.lower().split("x", 1))
+            with Image.open(src) as image:
+                image = image.convert("RGBA")
+                image = image.resize((width, height), Image.Resampling.LANCZOS)
+                image.save(dst)
+        except Exception:
+            shutil.copy2(src, dst)
 
 
 def resolve_mod(choice: str):
@@ -128,29 +235,67 @@ def resolve_mod(choice: str):
     return info["display"], None, None
 
 
+def resolve_build_path(value: str, default_path: Path | None = None) -> Path | None:
+    if value:
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = ROOT_DIR / path
+        return path
+    if default_path and default_path.is_file():
+        return default_path
+    return None
+
+
+def resolve_boot_sound(args):
+    if getattr(args, "no_boot_sound", False):
+        return None, None
+
+    boot_sound = resolve_build_path(
+        getattr(args, "boot_sound", "") or os.environ.get("WUHB_BOOT_SOUND", ""),
+        DEFAULT_BOOT_SOUND,
+    )
+    if not boot_sound:
+        print("No boot sound configured; WUHB boot audio will be skipped.")
+        return None, None
+    if not boot_sound.is_file():
+        sys.exit(f"Boot sound not found: {boot_sound}")
+
+    injector = resolve_build_path(
+        getattr(args, "boot_sound_injector", "") or os.environ.get("WUHB_BOOT_SOUND_INJECTOR", ""),
+        DEFAULT_BOOT_SOUND_INJECTOR,
+    )
+    if not injector or not injector.is_file():
+        sys.exit(f"WUHB boot sound injector not found: {injector or DEFAULT_BOOT_SOUND_INJECTOR}")
+
+    return boot_sound, injector
+
+
+def inject_boot_sound(wuhb: Path, boot_sound: Path | None, injector: Path | None):
+    if not boot_sound or not injector:
+        return
+    run([sys.executable, str(injector), str(wuhb), str(boot_sound)])
+
+
 # ── build ──────────────────────────────────────────────────────────────
 
 def cmd_build(args):
     env = setup_env()
     jobs = args.jobs or os.cpu_count() or 4
     for game in args.games:
-        print(f"\n=== Building RPX (PACKAGED_GAME={game}) ===")
-        run(["make", "-f", "Makefile.wiiu", "clean"], cwd=ROOT_DIR, env=env)
-        run(
-            ["make", "-f", "Makefile.wiiu", f"PACKAGED_GAME={game}", f"-j{jobs}"],
-            cwd=ROOT_DIR,
-            env=env,
-        )
-        rpx = BIN_DIR / "RSDKv4.rpx"
-        if rpx.is_file():
-            print(f"Built {rpx} ({rpx.stat().st_size} bytes)")
-        else:
-            sys.exit(f"RPX not found after build: {rpx}")
+        build_game(game, jobs, env, args.build_system)
 
 
 # ── pack ───────────────────────────────────────────────────────────────
 
-def pack_variant(choice: str, include_mod: bool, output_stem: str, out_dir: Path, env: dict):
+def pack_variant(
+    choice: str,
+    include_mod: bool,
+    output_stem: str,
+    out_dir: Path,
+    env: dict,
+    boot_sound: Path | None,
+    boot_sound_injector: Path | None,
+):
     wuhbtool = find_wuhbtool(env)
     if not wuhbtool:
         sys.exit("wuhbtool not found. Install devkitPro tools or set WUHB_CMD.")
@@ -201,9 +346,9 @@ def pack_variant(choice: str, include_mod: bool, output_stem: str, out_dir: Path
         display, folder, mod_path = resolve_mod(choice)
         if mod_path and mod_path.is_dir():
             print(f"  Including mod '{display}' from {mod_path}")
-            dst = app_dir / "mods" / folder
+            dst = pkg_dir / "wiiu" / "mods" / folder
             shutil.copytree(mod_path, dst)
-            (app_dir / "mods" / "modconfig.ini").write_text(f"[mods]\n{folder}=true\n")
+            (pkg_dir / "wiiu" / "mods" / "modconfig.ini").write_text(f"[mods]\n{folder}=true\n")
         else:
             sys.exit(f"Mod for Sonic {choice} not found in {MOD_DIR}")
 
@@ -222,11 +367,13 @@ def pack_variant(choice: str, include_mod: bool, output_stem: str, out_dir: Path
         cmd.extend(["--tv-image", str(target_tv), "--drc-image", str(target_drc)])
 
     run(cmd)
+    inject_boot_sound(out_file, boot_sound, boot_sound_injector)
     print(f"  Created {out_file}")
 
 
 def cmd_pack(args):
     env = setup_env()
+    boot_sound, boot_sound_injector = resolve_boot_sound(args)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     current_game = [None]
@@ -236,20 +383,14 @@ def cmd_pack(args):
             return
         if not args.skip_build:
             jobs = args.jobs or os.cpu_count() or 4
-            print(f"\n=== Building RPX (PACKAGED_GAME={choice}) ===")
-            run(["make", "-f", "Makefile.wiiu", "clean"], cwd=ROOT_DIR, env=env)
-            run(
-                ["make", "-f", "Makefile.wiiu", f"PACKAGED_GAME={choice}", f"-j{jobs}"],
-                cwd=ROOT_DIR,
-                env=env,
-            )
+            build_game(choice, jobs, env, args.build_system)
             current_game[0] = choice
 
     for choice in args.games:
         for modded in (False, True):
             stem = f"Sonic{choice}-{'modded' if modded else 'unmodded'}"
             ensure_rpx(choice)
-            pack_variant(choice, modded, stem, out_dir, env)
+            pack_variant(choice, modded, stem, out_dir, env, boot_sound, boot_sound_injector)
 
 
 # ── all ────────────────────────────────────────────────────────────────
@@ -286,8 +427,9 @@ def main():
     sub = p.add_subparsers(dest="command")
 
     # build
-    b = sub.add_parser("build", help="Compile RPX via Makefile.wiiu")
+    b = sub.add_parser("build", help="Compile RPX via CMake or Makefile.wiiu")
     b.add_argument("--games", nargs="+", default=["1", "2"], choices=["1", "2"])
+    b.add_argument("--build-system", choices=["cmake", "make"], default="cmake")
     b.add_argument("-j", "--jobs", type=int, default=0)
 
     # pack
@@ -295,11 +437,19 @@ def main():
     pk.add_argument("--games", nargs="+", default=["1", "2"], choices=["1", "2"])
     pk.add_argument("--out-dir", default=str(DEFAULT_OUT))
     pk.add_argument("--skip-build", action="store_true")
+    pk.add_argument("--build-system", choices=["cmake", "make"], default="cmake")
+    pk.add_argument("--boot-sound", default="", help="Path to boot.btsnd to inject into each WUHB")
+    pk.add_argument("--boot-sound-injector", default="", help="Path to the WUHB boot sound injector")
+    pk.add_argument("--no-boot-sound", action="store_true", help="Do not inject WUHB boot audio")
     pk.add_argument("-j", "--jobs", type=int, default=0)
 
     # all (default)
     a = sub.add_parser("all", help="Build + pack all 4 WUHB variants")
     a.add_argument("--out-dir", default=str(DEFAULT_OUT))
+    a.add_argument("--build-system", choices=["cmake", "make"], default="cmake")
+    a.add_argument("--boot-sound", default="", help="Path to boot.btsnd to inject into each WUHB")
+    a.add_argument("--boot-sound-injector", default="", help="Path to the WUHB boot sound injector")
+    a.add_argument("--no-boot-sound", action="store_true", help="Do not inject WUHB boot audio")
     a.add_argument("-j", "--jobs", type=int, default=0)
 
     # docker
@@ -310,6 +460,10 @@ def main():
     if not args.command:
         args.command = "all"
         args.out_dir = str(DEFAULT_OUT)
+        args.build_system = "cmake"
+        args.boot_sound = ""
+        args.boot_sound_injector = ""
+        args.no_boot_sound = False
         args.jobs = 0
 
     {

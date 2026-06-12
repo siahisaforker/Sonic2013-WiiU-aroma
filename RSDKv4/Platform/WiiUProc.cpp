@@ -26,7 +26,7 @@ bool WiiU_ProcIsRunning() { return WHBProcIsRunning(); }
 #endif
 
 extern "C" __attribute__((weak)) void WiiU_OnReleaseForeground() { }
-extern "C" __attribute__((weak)) void WiiU_OnAcquireForeground() { }
+extern "C" __attribute__((weak)) bool WiiU_OnAcquireForeground() { return true; }
 
 #else
 void WiiU_ProcInit() { }

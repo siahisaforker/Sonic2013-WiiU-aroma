@@ -12,7 +12,7 @@ extern "C" {
 #endif
 
 void WiiU_OnReleaseForeground();
-void WiiU_OnAcquireForeground();
+bool WiiU_OnAcquireForeground();
 
 #ifdef __cplusplus
 }

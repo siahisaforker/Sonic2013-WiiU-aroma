@@ -37,6 +37,20 @@ int sendCounter = 0;
 #endif
 
 #if RETRO_PLATFORM == RETRO_WIIU
+static bool TryWiiUExternalGameFolder(const char *folder, char *outFolder)
+{
+    char path[0x200];
+    sprintf(path, "/vol/external01/%s/Data.rsdk", folder);
+
+    FileIO *file = fOpen(path, "rb");
+    if (!file)
+        return false;
+
+    fClose(file);
+    StrCopy(outFolder, folder);
+    return true;
+}
+
 static bool ReadWiiUGameFolderFromMetadata(char *outFolder, size_t outFolderSize)
 {
     if (!outFolder || !outFolderSize)
@@ -97,42 +111,36 @@ static bool ResolveWiiUExternalGameFolder(char *outFolder, size_t outFolderSize)
 
     if (launchPath[0]) {
         if (strstr(launchPath, "RSDKv4_Sonic1") != NULL || strstr(launchPath, "Sonic1.wuhb") != NULL) {
-            StrCopy(outFolder, "Sonic1");
-            return true;
+            if (TryWiiUExternalGameFolder("Sonic1", outFolder))
+                return true;
         }
         if (strstr(launchPath, "RSDKv4_Sonic2") != NULL || strstr(launchPath, "Sonic2.wuhb") != NULL) {
-            StrCopy(outFolder, "Sonic2");
-            return true;
+            if (TryWiiUExternalGameFolder("Sonic2", outFolder))
+                return true;
         }
     }
 
-    if (ReadWiiUGameFolderFromMetadata(outFolder, outFolderSize))
-        return true;
+    char metadataFolder[0x100];
+    if (ReadWiiUGameFolderFromMetadata(metadataFolder, sizeof(metadataFolder))) {
+        if (TryWiiUExternalGameFolder(metadataFolder, outFolder))
+            return true;
+    }
 
 #if defined(PACKAGED_GAME)
     if (PACKAGED_GAME == 1) {
-        StrCopy(outFolder, "Sonic1");
-        return true;
+        if (TryWiiUExternalGameFolder("Sonic1", outFolder))
+            return true;
     }
     if (PACKAGED_GAME == 2) {
-        StrCopy(outFolder, "Sonic2");
-        return true;
+        if (TryWiiUExternalGameFolder("Sonic2", outFolder))
+            return true;
     }
 #endif
 
-    FileIO *file = fOpen("/vol/external01/Sonic2/Data.rsdk", "rb");
-    if (file) {
-        fClose(file);
-        StrCopy(outFolder, "Sonic2");
+    if (TryWiiUExternalGameFolder("Sonic2", outFolder))
         return true;
-    }
-
-    file = fOpen("/vol/external01/Sonic1/Data.rsdk", "rb");
-    if (file) {
-        fClose(file);
-        StrCopy(outFolder, "Sonic1");
+    if (TryWiiUExternalGameFolder("Sonic1", outFolder))
         return true;
-    }
 
     return false;
 }

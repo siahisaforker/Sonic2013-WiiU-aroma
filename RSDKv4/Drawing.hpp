@@ -162,6 +162,10 @@ extern GLuint fbTextureId;
 int InitRenderDevice();
 void FlipScreen();
 void ReleaseRenderDevice();
+#if RETRO_PLATFORM == RETRO_WIIU
+void ReleaseRenderDeviceForForeground();
+int RecreateRenderDeviceForForeground();
+#endif
 
 void GenerateBlendLookupTable();
 

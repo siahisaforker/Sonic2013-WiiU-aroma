@@ -13,6 +13,8 @@ bool engineDebugMode = false;
 #include "Platform/WiiUProc.hpp"
 #include "Platform/WiiUDRC.hpp"
 #if defined(__WUT__)
+#include <coreinit/thread.h>
+#include <coreinit/time.h>
 #include <proc_ui/procui.h>
 #endif
 #endif
@@ -270,6 +272,8 @@ bool processEvents()
 #include <dirent.h>
 #include <sys/stat.h>
 
+#define WIIU_BOOT_LOG(...) WHBLogPrintf("[RSDKv4] " __VA_ARGS__)
+
 static ssize_t wiiu_log_write(struct _reent* r, void* fd, const char* ptr, size_t len) {
     WHBLogPrintf("%*.*s", len, len, ptr);
     return len;
@@ -278,6 +282,150 @@ static const devoptab_t dotab_stdout = {
     .name = "stdout_whb",
     .write_r = wiiu_log_write,
 };
+
+static bool WiiUDataPackExists(const char *path)
+{
+    FileIO *file = fOpen(path, "rb");
+    if (!file)
+        return false;
+    fClose(file);
+    return true;
+}
+
+static bool WiiUTryDataPath(char *dest, const char *root, const char *reason)
+{
+    char candidate[0x300];
+    sprintf(candidate, "%s%s", root, Engine.dataFile[0]);
+
+    if (!WiiUDataPackExists(candidate))
+        return false;
+
+    StrCopy(dest, candidate);
+    printLog("WiiU datapack selected (%s): %s", reason, dest);
+    WIIU_BOOT_LOG("datapack selected (%s): %s", reason, dest);
+    return true;
+}
+
+static bool WiiUTryGameFolderData(char *dest, const char *folder, const char *reason)
+{
+    char root[0x200];
+    sprintf(root, "/vol/external01/%s/", folder);
+    if (WiiUTryDataPath(dest, root, reason))
+        return true;
+
+    sprintf(root, "/vol/content/apps/RSDKv4_%s/", folder);
+    if (WiiUTryDataPath(dest, root, reason))
+        return true;
+
+    sprintf(root, "/content/apps/RSDKv4_%s/", folder);
+    if (WiiUTryDataPath(dest, root, reason))
+        return true;
+
+    sprintf(root, "/vol/external01/wiiu/apps/RSDKv4_%s/", folder);
+    if (WiiUTryDataPath(dest, root, reason))
+        return true;
+
+    sprintf(root, "/vol/external01/RSDKv4_%s/", folder);
+    return WiiUTryDataPath(dest, root, reason);
+}
+
+static bool WiiUReadPackagedGameFolder(char *folder, size_t folderSize)
+{
+    if (!folder || !folderSize)
+        return false;
+
+    const char *metaCandidates[] = {
+        "/code/metadata.txt",
+        "/vol/content/apps/RSDKv4_Sonic1/metadata.txt",
+        "/vol/content/apps/RSDKv4_Sonic2/metadata.txt",
+        "/content/apps/RSDKv4_Sonic1/metadata.txt",
+        "/content/apps/RSDKv4_Sonic2/metadata.txt",
+        "/vol/external01/wiiu/apps/RSDKv4_Sonic1/metadata.txt",
+        "/vol/external01/wiiu/apps/RSDKv4_Sonic2/metadata.txt",
+        "/vol/external01/wiiu/apps/RSDKv4/metadata.txt",
+        "metadata.txt",
+        "/content/apps/RSDKv4/metadata.txt",
+        "content/apps/RSDKv4/metadata.txt",
+        NULL,
+    };
+
+    folder[0] = '\0';
+
+    for (int m = 0; metaCandidates[m]; ++m) {
+        FileIO *metaFile = fOpen(metaCandidates[m], "rb");
+        if (!metaFile)
+            continue;
+
+        char metaBuf[0x400];
+        int read = fRead(metaBuf, 1, sizeof(metaBuf) - 1, metaFile);
+        metaBuf[read] = '\0';
+        fClose(metaFile);
+
+        const char *key = "game_folder=";
+        char *pos       = strstr(metaBuf, key);
+        if (!pos)
+            continue;
+
+        pos += strlen(key);
+        size_t i = 0;
+        while (*pos && *pos != '\n' && *pos != '\r' && i < folderSize - 1)
+            folder[i++] = *pos++;
+        folder[i] = '\0';
+
+        if (i > 0) {
+            printLog("WiiU metadata %s -> game_folder=%s", metaCandidates[m], folder);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void WiiUResolvePrimaryDataPack(char *dest)
+{
+    char folder[0x100];
+
+    if (launchPath[0]) {
+        printLog("launchPath='%s'", launchPath);
+        if (strstr(launchPath, "RSDKv4_Sonic1") != NULL || strstr(launchPath, "Sonic1.wuhb") != NULL) {
+            if (WiiUTryGameFolderData(dest, "Sonic1", "launch path"))
+                return;
+        }
+        if (strstr(launchPath, "RSDKv4_Sonic2") != NULL || strstr(launchPath, "Sonic2.wuhb") != NULL) {
+            if (WiiUTryGameFolderData(dest, "Sonic2", "launch path"))
+                return;
+        }
+    }
+
+    if (WiiUReadPackagedGameFolder(folder, sizeof(folder))) {
+        if (WiiUTryGameFolderData(dest, folder, "metadata"))
+            return;
+    }
+
+#if defined(PACKAGED_GAME)
+    if (PACKAGED_GAME == 1 && WiiUTryGameFolderData(dest, "Sonic1", "PACKAGED_GAME"))
+        return;
+    if (PACKAGED_GAME == 2 && WiiUTryGameFolderData(dest, "Sonic2", "PACKAGED_GAME"))
+        return;
+#endif
+
+    if (WiiUTryGameFolderData(dest, "Sonic2", "SD fallback"))
+        return;
+    if (WiiUTryGameFolderData(dest, "Sonic1", "SD fallback"))
+        return;
+
+    if (WiiUTryDataPath(dest, "/vol/content/", "WUHB content root"))
+        return;
+    if (WiiUTryDataPath(dest, "/content/", "WUHB content root"))
+        return;
+    if (WiiUTryDataPath(dest, BASE_PATH, "BASE_PATH"))
+        return;
+
+    StrCopy(dest, BASE_PATH);
+    StrAdd(dest, Engine.dataFile[0]);
+    printLog("WiiU datapack unresolved; final fallback: %s", dest);
+    WIIU_BOOT_LOG("datapack unresolved; final fallback: %s", dest);
+}
 #endif
 
 void RetroEngine::Init()
@@ -329,199 +477,7 @@ void RetroEngine::Init()
 #else
 
 #if RETRO_PLATFORM == RETRO_WIIU
-    // Prefer packaged metadata if present. metadata.txt is added by the packer
-    // and may contain a `game_folder=Sonic1` or `game_folder=Sonic2` line.
-    char metaBuf[0x400];
-    bool metaFound = false;
-
-    // Diagnostic helper: list directory contents for common mount points
-    auto LogDirContents = [&](const char *path) {
-        DIR *d = opendir(path);
-        if (!d) {
-            printLog("dir missing: %s", path);
-            return;
-        }
-        printLog("dir listing: %s", path);
-        struct dirent *ent;
-        while ((ent = readdir(d)) != NULL) {
-            printLog(" - %s", ent->d_name);
-        }
-        closedir(d);
-    };
-
-    // If the launcher path was recorded (argv[0]), prefer using it to
-    // determine which packaged app folder we're running from. The packer
-    // writes the RPX and metadata into distinct internal folders
-    // (`RSDKv4_Sonic1` / `RSDKv4_Sonic2`), so check for those markers.
-    if (launchPath[0]) {
-        if (strstr(launchPath, "RSDKv4_Sonic1") != NULL) {
-            StrCopy(dest, "/vol/external01/RSDKv4_Sonic1/");
-            StrAdd(dest, Engine.dataFile[0]);
-            metaFound = true;
-            printLog("launchPath indicates RSDKv4_Sonic1 -> %s", dest);
-        }
-        else if (strstr(launchPath, "RSDKv4_Sonic2") != NULL) {
-            StrCopy(dest, "/vol/external01/RSDKv4_Sonic2/");
-            StrAdd(dest, Engine.dataFile[0]);
-            metaFound = true;
-            printLog("launchPath indicates RSDKv4_Sonic2 -> %s", dest);
-        }
-    }
-
-    // Diagnostic: always log the recorded launchPath so we can see what argv[0] contains on the console
-    if (launchPath[0])
-        printLog("launchPath='%s'", launchPath);
-
-    // Diagnostic: enumerate likely mount points so we can see where package files are exposed on-device
-    printLog("enumerating likely mount points for debugging metadata visibility");
-    LogDirContents("/");
-    LogDirContents("/content");
-    LogDirContents("/content/apps");
-    LogDirContents("/content/apps/RSDKv4_Sonic1");
-    LogDirContents("/content/apps/RSDKv4_Sonic2");
-    LogDirContents("/code");
-    LogDirContents("/vol");
-    LogDirContents("/vol/external01");
-    LogDirContents("/vol/external01/wiiu");
-    LogDirContents("/vol/external01/wiiu/apps");
-    // Also show BASE_PATH if defined
-#if defined(BASE_PATH)
-    printLog("BASE_PATH=%s", BASE_PATH);
-#endif
-
-    // Compile-time pack flag: if the binary was built specifically for Sonic1/2,
-    // prefer that external folder immediately. This covers the case where argv[0]
-    // doesn't contain a useful path (eg. 'root.rpx') so launchPath detection fails.
-#if defined(PACKAGED_GAME)
-    if (!metaFound) {
-        int packagedVal = PACKAGED_GAME;
-        if (packagedVal == 1) {
-            StrCopy(dest, "/vol/external01/Sonic1/");
-            StrAdd(dest, Engine.dataFile[0]);
-            metaFound = true;
-            printLog("compile-time PACKAGED_GAME=%d -> %s", packagedVal, dest);
-        }
-        else if (packagedVal == 2) {
-            StrCopy(dest, "/vol/external01/Sonic2/");
-            StrAdd(dest, Engine.dataFile[0]);
-            metaFound = true;
-            printLog("compile-time PACKAGED_GAME=%d -> %s", packagedVal, dest);
-        }
-    }
-#endif
-
-    // If `launchPath` already selected a `dest`, trust it and skip metadata scanning
-    if (!metaFound) {
-        // Try a few likely locations for metadata inside a WUHB or next to the RPX.
-            FileIO *metaFile = NULL;
-            // Also try the per-package internal app folders created by the packer
-            const char *metaCandidates[] = {
-                "/code/metadata.txt",
-                "/vol/external01/wiiu/apps/RSDKv4_Sonic1/metadata.txt",
-                "/vol/external01/wiiu/apps/RSDKv4_Sonic2/metadata.txt",
-                "/vol/external01/wiiu/apps/RSDKv4/metadata.txt",
-                "metadata.txt",
-                "/content/apps/RSDKv4/metadata.txt",
-                "content/apps/RSDKv4/metadata.txt",
-                "/meta/meta.ini",
-                NULL,
-            };
-        const char *metaFoundPath = NULL;
-
-        for (int m = 0; metaCandidates[m]; ++m) {
-            // Log each candidate check to help debugging on-device
-            printLog("checking metadata candidate: %s", metaCandidates[m]);
-            metaFile = fOpen(metaCandidates[m], "rb");
-            if (metaFile) {
-                metaFoundPath = metaCandidates[m];
-                printLog("metadata exists: %s", metaFoundPath);
-                break;
-            }
-            else {
-                printLog("metadata missing: %s", metaCandidates[m]);
-            }
-        }
-        if (!metaFile) {
-            // Try metadata next to BASE_PATH as a last resort
-            char metaPath[0x300];
-            StrCopy(metaPath, BASE_PATH);
-            StrAdd(metaPath, "metadata.txt");
-            metaFile = fOpen(metaPath, "rb");
-            if (metaFile)
-                metaFoundPath = metaPath;
-        }
-
-        if (metaFile) {
-            int read = fRead(metaBuf, 1, sizeof(metaBuf) - 1, metaFile);
-            metaBuf[read] = '\0';
-            fClose(metaFile);
-
-            const char *key = "game_folder=";
-            char *pos       = strstr(metaBuf, key);
-            if (pos) {
-                pos += strlen(key);
-                char folder[0x100];
-                int i = 0;
-                while (*pos && *pos != '\n' && *pos != '\r' && i < (int)sizeof(folder) - 1) {
-                    folder[i++] = *pos++;
-                }
-                folder[i] = '\0';
-                if (i > 0) {
-                    // Try likely mounted paths inside a WUHB: /vol/external01/<folder>/Data.rsdk
-                    char extPath[0x300];
-                    sprintf(extPath, "/vol/external01/%s/%s", folder, Engine.dataFile[0]);
-                    FileIO *extFile = fOpen(extPath, "rb");
-                    if (extFile) {
-                        fClose(extFile);
-                        StrCopy(dest, "/vol/external01/");
-                        StrAdd(dest, folder);
-                        StrAdd(dest, "/");
-                        StrAdd(dest, Engine.dataFile[0]);
-                        metaFound = true;
-                        printLog("metadata: found %s -> game_folder=%s; using %s", metaFoundPath ? metaFoundPath : "(unknown)", folder, dest);
-                    }
-                }
-            }
-        }
-
-        // Diagnostic: log the recorded launchPath so we can see what argv[0] contains on the console
-        if (launchPath[0])
-            printLog("launchPath='%s'", launchPath);
-
-        if (!metaFound) {
-            // Fall back to explicit Sonic1 / Sonic2 checks so SD users can keep per-game folders
-            char extPath[0x200];
-            FileIO *extFile = NULL;
-
-            // Prefer Sonic2 if present; check Sonic2 first to avoid Sonic1 shadowing Sonic2
-            sprintf(extPath, "/vol/external01/Sonic2/%s", Engine.dataFile[0]);
-            extFile = fOpen(extPath, "rb");
-            if (extFile) {
-                fClose(extFile);
-                StrCopy(dest, "/vol/external01/Sonic2/");
-                StrAdd(dest, Engine.dataFile[0]);
-                printLog("fallback: found /vol/external01/Sonic2/%s", Engine.dataFile[0]);
-            }
-            else {
-                sprintf(extPath, "/vol/external01/Sonic1/%s", Engine.dataFile[0]);
-                extFile = fOpen(extPath, "rb");
-                if (extFile) {
-                    fClose(extFile);
-                    StrCopy(dest, "/vol/external01/Sonic1/");
-                    StrAdd(dest, Engine.dataFile[0]);
-                    printLog("fallback: found /vol/external01/Sonic1/%s", Engine.dataFile[0]);
-                }
-                else {
-                    StrCopy(dest, BASE_PATH);
-                    StrAdd(dest, Engine.dataFile[0]);
-                    printLog("fallback: no external Data.rsdk found; using BASE_PATH %s", dest);
-                }
-            }
-        }
-    }
-    else {
-        printLog("launchPath preselected dest; skipping metadata/fallback checks -> %s", dest);
-    }
+    WiiUResolvePrimaryDataPack(dest);
 #else
 
     StrCopy(dest, BASE_PATH);
@@ -532,9 +488,11 @@ void RetroEngine::Init()
 #if RETRO_PLATFORM == RETRO_WIIU
     // Attempt to locate a `mods/` folder inside the mounted WUHB content
     // Common mount points vary by launcher; check likely locations and pick the first that exists.
+    bool foundPackagedMods = false;
     const char *modCandidates[] = {
         // First, check WUHB-wide mods folder exposed at /vol/content/mods/
         "/vol/content/mods/",
+        "/content/mods/",
         // Common WUHB / content mount points
         "/vol/content/apps/RSDKv4_Sonic1/mods/",
         "/vol/content/apps/RSDKv4_Sonic2/mods/",
@@ -559,6 +517,8 @@ void RetroEngine::Init()
             // copy into global `modsPath` so ModAPI will use it
             StrCopy(modsPath, modCandidates[mi]);
             printLog("modsPath set to %s", modsPath);
+            WIIU_BOOT_LOG("modsPath set to %s", modsPath);
+            foundPackagedMods = true;
 
             // Print the chosen mods directory contents to aid debugging on-device
             {
@@ -591,10 +551,14 @@ void RetroEngine::Init()
                 fClose(cfgFile);
                 StrCopy(modsPath, modCandidates[mi]);
                 printLog("modsPath set (via modconfig) to %s", modsPath);
+                WIIU_BOOT_LOG("modsPath set via modconfig to %s", modsPath);
+                foundPackagedMods = true;
                 break;
             }
         }
     }
+    if (!foundPackagedMods)
+        WIIU_BOOT_LOG("no WUHB mods path found; current modsPath=%s", modsPath);
 
 #if RETRO_USE_MOD_LOADER
     // Initialize mods after we've determined the modsPath so the loader can
@@ -605,6 +569,7 @@ void RetroEngine::Init()
 #endif
 
     CheckRSDKFile(dest);
+    WIIU_BOOT_LOG("CheckRSDKFile('%s') -> usingDataFile=%d usingBytecode=%d", dest, Engine.usingDataFile, Engine.usingBytecode);
 #else
     CheckRSDKFile("Data.rsdk");
 #endif
@@ -626,13 +591,26 @@ void RetroEngine::Init()
 #endif
     SaveGame *saveGame = (SaveGame *)saveRAM;
 
-    if (LoadGameConfig("Data/Game/GameConfig.bin")) {
-        if (InitRenderDevice()) {
-            if (InitAudioPlayback()) {
+    bool loadedGameConfig = LoadGameConfig("Data/Game/GameConfig.bin");
+#if RETRO_PLATFORM == RETRO_WIIU
+    WIIU_BOOT_LOG("LoadGameConfig(Data/Game/GameConfig.bin) -> %d", loadedGameConfig);
+#endif
+    if (loadedGameConfig) {
+        bool renderReady = InitRenderDevice();
+#if RETRO_PLATFORM == RETRO_WIIU
+        WIIU_BOOT_LOG("InitRenderDevice() -> %d", renderReady);
+#endif
+        if (renderReady) {
+            bool audioReady = InitAudioPlayback();
+#if RETRO_PLATFORM == RETRO_WIIU
+            WIIU_BOOT_LOG("InitAudioPlayback() -> %d", audioReady);
+#endif
+            if (audioReady) {
                 InitFirstStage();
                 ClearScriptData();
                 initialised = true;
                 running     = true;
+                WIIU_BOOT_LOG("engine startup complete");
 
 #if !RETRO_USE_ORIGINAL_CODE
                 if ((startList != 0xFF && startList) || (startStage != 0xFF && startStage) || startPlayer != 0xFF) {
@@ -791,10 +769,14 @@ void RetroEngine::Run()
             break;
         } else if (procStatus == PROCUI_STATUS_IN_FOREGROUND) {
             if (!wasInForeground) {
-                WiiU_OnAcquireForeground();
+                if (!WiiU_OnAcquireForeground()) {
+                    OSSleepTicks(OSMillisecondsToTicks(16));
+                    continue;
+                }
                 wasInForeground = true;
             }
         } else if (procStatus == PROCUI_STATUS_IN_BACKGROUND) {
+            OSSleepTicks(OSMillisecondsToTicks(16));
             continue;
         }
 #endif
@@ -879,6 +861,8 @@ void RetroEngine::Run()
 #endif
     SDL_Quit();
 #endif
+
+    CloseRSDKContainers();
 
 #if RETRO_PLATFORM == RETRO_WIIU
     WiiU_ProcShutdown();

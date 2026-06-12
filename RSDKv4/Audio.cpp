@@ -51,11 +51,23 @@ SDL_AudioSpec audioDeviceFormat;
 #define UnlockAudioDevice() ;
 #endif
 
-int InitAudioPlayback()
+static int OpenAudioPlaybackDevice(bool startPaused = false)
 {
-    StopAllSfx(); //"init"
 #if !RETRO_USE_ORIGINAL_CODE
 #if RETRO_USING_SDL1 || RETRO_USING_SDL2
+#if RETRO_USING_SDL2
+    if (audioDevice) {
+        audioEnabled = true;
+        SDL_PauseAudioDevice(audioDevice, startPaused ? 1 : 0);
+        return true;
+    }
+#elif RETRO_USING_SDL1
+    if (audioEnabled) {
+        SDL_PauseAudio(startPaused ? 1 : 0);
+        return true;
+    }
+#endif
+
     SDL_AudioSpec want;
     want.freq     = AUDIO_FREQUENCY;
     want.format   = AUDIO_FORMAT;
@@ -66,7 +78,7 @@ int InitAudioPlayback()
 #if RETRO_USING_SDL2
     if ((audioDevice = SDL_OpenAudioDevice(nullptr, 0, &want, &audioDeviceFormat, SDL_AUDIO_ALLOW_FREQUENCY_CHANGE)) > 0) {
         audioEnabled = true;
-        SDL_PauseAudioDevice(audioDevice, 0);
+        SDL_PauseAudioDevice(audioDevice, startPaused ? 1 : 0);
     }
     else {
         printLog("Unable to open audio device: %s", SDL_GetError());
@@ -76,16 +88,85 @@ int InitAudioPlayback()
 #elif RETRO_USING_SDL1
     if (SDL_OpenAudio(&want, &audioDeviceFormat) == 0) {
         audioEnabled = true;
-        SDL_PauseAudio(0);
+        SDL_PauseAudio(startPaused ? 1 : 0);
     }
     else {
         printLog("Unable to open audio device: %s", SDL_GetError());
         audioEnabled = false;
         return true; // no audio but game wont crash now
     }
-#endif // !RETRO_USING_SDL1
 #endif
 #endif
+#endif
+
+    return true;
+}
+
+static void RefreshMusicStreamsForAudioDevice()
+{
+#if !RETRO_USE_ORIGINAL_CODE
+#if RETRO_USING_SDL2
+    LockAudioDevice();
+    for (int i = 0; i < STREAMFILE_COUNT; ++i) {
+        StreamInfo *strmInfo = &streamInfo[i];
+        if (!strmInfo->loaded || !strmInfo->vorbisFile.vi)
+            continue;
+
+        if (strmInfo->stream) {
+            SDL_FreeAudioStream(strmInfo->stream);
+            strmInfo->stream = NULL;
+        }
+
+        strmInfo->stream = SDL_NewAudioStream(AUDIO_S16, strmInfo->vorbisFile.vi->channels, (int)strmInfo->vorbisFile.vi->rate,
+                                              audioDeviceFormat.format, audioDeviceFormat.channels, audioDeviceFormat.freq);
+        if (!strmInfo->stream)
+            printLog("Failed to recreate stream after audio reopen: %s", SDL_GetError());
+    }
+    UnlockAudioDevice();
+#endif
+#endif
+}
+
+void CloseAudioPlaybackDevice()
+{
+#if !RETRO_USE_ORIGINAL_CODE
+#if RETRO_USING_SDL2
+    if (audioDevice) {
+        SDL_PauseAudioDevice(audioDevice, 1);
+        audioEnabled = false;
+        SDL_CloseAudioDevice(audioDevice);
+        audioDevice = 0;
+    }
+#elif RETRO_USING_SDL1
+    if (audioEnabled) {
+        SDL_PauseAudio(1);
+        audioEnabled = false;
+        SDL_CloseAudio();
+    }
+#endif
+#endif
+}
+
+void ReopenAudioPlaybackDevice()
+{
+#if !RETRO_USE_ORIGINAL_CODE
+    if (!audioEnabled) {
+        OpenAudioPlaybackDevice(true);
+        RefreshMusicStreamsForAudioDevice();
+#if RETRO_USING_SDL2
+        if (audioDevice)
+            SDL_PauseAudioDevice(audioDevice, 0);
+#elif RETRO_USING_SDL1
+        SDL_PauseAudio(0);
+#endif
+    }
+#endif
+}
+
+int InitAudioPlayback()
+{
+    StopAllSfx(); //"init"
+    OpenAudioPlaybackDevice();
 
     LoadGlobalSfx();
 
@@ -324,8 +405,10 @@ void ProcessAudioPlayback(void *userdata, Uint8 *stream, int len)
 {
     (void)userdata; // Unused
 
-    if (!audioEnabled)
+    if (!audioEnabled) {
+        SDL_memset(stream, 0, len);
         return;
+    }
 
     Sint16 *output_buffer = (Sint16 *)stream;
 

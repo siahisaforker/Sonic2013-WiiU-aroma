@@ -1,5 +1,10 @@
 #include "RetroEngine.hpp"
 
+#if RETRO_PLATFORM == RETRO_WIIU
+#include <padscore/kpad.h>
+#include <padscore/wpad.h>
+#endif
+
 InputData inputPress = InputData();
 InputData inputDown  = InputData();
 
@@ -309,8 +314,86 @@ void ReleaseInputDevices()
     controllers.clear();
 }
 
+#if RETRO_PLATFORM == RETRO_WIIU
+struct WiiUSidewaysWiimoteState {
+    bool connected;
+    uint32_t hold;
+};
+
+static WiiUSidewaysWiimoteState wiiuSidewaysWiimotes[4];
+
+static bool WiiU_IsBareWiimoteExtension(WPADExtensionType ext)
+{
+    return ext == WPAD_EXT_CORE || ext == WPAD_EXT_MPLUS;
+}
+
+static bool WiiU_UpdateSidewaysWiimotes()
+{
+    bool anyHeld = false;
+
+    for (int chan = 0; chan < 4; ++chan) {
+        WPADExtensionType ext;
+        if (WPADProbe((WPADChan)chan, &ext) != 0 || !WiiU_IsBareWiimoteExtension(ext)) {
+            wiiuSidewaysWiimotes[chan].connected = false;
+            wiiuSidewaysWiimotes[chan].hold      = 0;
+            continue;
+        }
+
+        wiiuSidewaysWiimotes[chan].connected = true;
+
+        KPADStatus kpad;
+        KPADError kpadErr;
+        KPADReadEx((KPADChan)chan, &kpad, 1, &kpadErr);
+        if (kpadErr == KPAD_ERROR_OK) {
+            wiiuSidewaysWiimotes[chan].hold = kpad.hold;
+        }
+        else if (kpadErr != KPAD_ERROR_NO_SAMPLES) {
+            wiiuSidewaysWiimotes[chan].connected = false;
+            wiiuSidewaysWiimotes[chan].hold      = 0;
+        }
+
+        anyHeld |= wiiuSidewaysWiimotes[chan].hold != 0;
+    }
+
+    return anyHeld;
+}
+
+static bool WiiU_GetSidewaysWiimoteButton(int inputID)
+{
+    uint32_t mask = 0;
+
+    switch (inputID) {
+        case INPUT_UP: mask = WPAD_BUTTON_RIGHT; break;
+        case INPUT_DOWN: mask = WPAD_BUTTON_LEFT; break;
+        case INPUT_LEFT: mask = WPAD_BUTTON_UP; break;
+        case INPUT_RIGHT: mask = WPAD_BUTTON_DOWN; break;
+        case INPUT_BUTTONA: mask = WPAD_BUTTON_2; break;
+        case INPUT_BUTTONB: mask = WPAD_BUTTON_1; break;
+        case INPUT_BUTTONC: mask = WPAD_BUTTON_A; break;
+        case INPUT_BUTTONX: mask = WPAD_BUTTON_B; break;
+        case INPUT_START: mask = WPAD_BUTTON_PLUS; break;
+        case INPUT_SELECT: mask = WPAD_BUTTON_MINUS; break;
+        default: return false;
+    }
+
+    for (int chan = 0; chan < 4; ++chan) {
+        if (wiiuSidewaysWiimotes[chan].connected && (wiiuSidewaysWiimotes[chan].hold & mask))
+            return true;
+    }
+
+    return false;
+}
+
+#endif
+
 void ProcessInput()
 {
+#if RETRO_PLATFORM == RETRO_WIIU
+    bool sidewaysWiimoteActive = WiiU_UpdateSidewaysWiimotes();
+    if (sidewaysWiimoteActive)
+        inputType = 1;
+#endif
+
 #if RETRO_USING_SDL2
     int length           = 0;
     const byte *keyState = SDL_GetKeyboardState(&length);
@@ -328,7 +411,11 @@ void ProcessInput()
     }
     else if (inputType == 1) {
         for (int i = 0; i < INPUT_ANY; i++) {
-            if (getControllerButton(inputDevice[i].contMappings)) {
+            bool down = getControllerButton(inputDevice[i].contMappings);
+#if RETRO_PLATFORM == RETRO_WIIU
+            down |= WiiU_GetSidewaysWiimoteButton(i);
+#endif
+            if (down) {
                 inputDevice[i].setHeld();
                 if (!inputDevice[INPUT_ANY].hold)
                     inputDevice[INPUT_ANY].setHeld();
@@ -357,6 +444,9 @@ void ProcessInput()
             break;
         }
     }
+#if RETRO_PLATFORM == RETRO_WIIU
+    isPressed |= sidewaysWiimoteActive;
+#endif
     if (isPressed)
         inputType = 1;
     else if (inputType == 1)

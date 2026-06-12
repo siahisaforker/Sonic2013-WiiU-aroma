@@ -69,6 +69,7 @@ extern int bufferPosition;
 extern int virtualFileOffset;
 extern bool useEncryption;
 extern byte packID;
+extern bool cFileUsingDataPack;
 extern byte eStringPosA;
 extern byte eStringPosB;
 extern byte eStringNo;
@@ -93,19 +94,7 @@ inline void CopyFilePath(char *dest, const char *src)
 }
 bool CheckRSDKFile(const char *filePath);
 extern byte* packMemoryBuffers[RETRO_PACK_COUNT];
-
-inline void CloseRSDKContainers()
-{
-    for (int i = 0; i < 4; ++i) {
-        strcpy(rsdkContainer.packNames[i], "");
-        if (packMemoryBuffers[i]) {
-            free(packMemoryBuffers[i]);
-            packMemoryBuffers[i] = NULL;
-        }
-    }
-    rsdkContainer.packCount = 0;
-    rsdkContainer.fileCount = 0;
-}
+void CloseRSDKContainers();
 
 #if !RETRO_USE_ORIGINAL_CODE
 int CheckFileInfo(const char *filepath);
@@ -127,6 +116,8 @@ inline bool CloseFile()
 #endif
 
     cFileHandle = NULL;
+    cFileHandleCanClose = false;
+    cFileUsingDataPack = false;
     return result;
 }
 
@@ -137,22 +128,32 @@ void FileSkip(int count);
 
 inline size_t FillFileBuffer()
 {
-    if (readPos + 0x10000 <= fileSize)
+    int endPos = cFileUsingDataPack ? virtualFileOffset + vFileSize : fileSize;
+    if (readPos >= endPos) {
+        readSize       = 0;
+        bufferPosition = 0;
+        return 0;
+    }
+
+    int remaining = endPos - readPos;
+    if (remaining > 0x10000)
         readSize = 0x10000;
     else
-        readSize = fileSize - readPos;
+        readSize = remaining;
 
     size_t result = 0;
 #if !RETRO_USE_ORIGINAL_CODE
     if (modFileMemoryBuffer) {
         memcpy(fileBuffer, (byte*)modFileMemoryBuffer + readPos, readSize);
         result = readSize;
-    } else
+    }
+    else
 #endif
     if (packID < RETRO_PACK_COUNT && packMemoryBuffers[packID]) {
         memcpy(fileBuffer, packMemoryBuffers[packID] + readPos, readSize);
         result = readSize;
-    } else {
+    }
+    else if (cFileHandle) {
         result = fRead(fileBuffer, 1u, readSize, cFileHandle);
     }
     readPos += readSize;

@@ -102,6 +102,15 @@ bool integerScaling = false;
 bool disableEnhancedScaling = false;
 // enable bilinear scaling, which just disables the fancy upscaling that enhanced scaling does.
 bool bilinearScaling = false;
+static bool foregroundRenderReinit = false;
+#endif
+
+#if RETRO_USING_SDL2
+#if RETRO_PLATFORM == RETRO_WIIU && !RETRO_USING_OPENGL && RETRO_SOFTWARE_RENDER
+static const Uint32 RETRO_SCREEN_TEXTURE_FORMAT = SDL_PIXELFORMAT_RGBA8888;
+#else
+static const Uint32 RETRO_SCREEN_TEXTURE_FORMAT = SDL_PIXELFORMAT_RGB565;
+#endif
 #endif
 
 int InitRenderDevice()
@@ -172,7 +181,7 @@ int InitRenderDevice()
     SDL_SetRenderDrawBlendMode(Engine.renderer, SDL_BLENDMODE_BLEND);
 
 #if RETRO_SOFTWARE_RENDER
-    Engine.screenBuffer = SDL_CreateTexture(Engine.renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, SCREEN_XSIZE, SCREEN_YSIZE);
+    Engine.screenBuffer = SDL_CreateTexture(Engine.renderer, RETRO_SCREEN_TEXTURE_FORMAT, SDL_TEXTUREACCESS_STREAMING, SCREEN_XSIZE, SCREEN_YSIZE);
 
     if (!Engine.screenBuffer) {
         printLog("ERROR: failed to create screen buffer!\nerror msg: %s", SDL_GetError());
@@ -180,7 +189,7 @@ int InitRenderDevice()
     }
 
     Engine.screenBuffer2x =
-        SDL_CreateTexture(Engine.renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, SCREEN_XSIZE * 2, SCREEN_YSIZE * 2);
+        SDL_CreateTexture(Engine.renderer, RETRO_SCREEN_TEXTURE_FORMAT, SDL_TEXTUREACCESS_STREAMING, SCREEN_XSIZE * 2, SCREEN_YSIZE * 2);
 
     if (!Engine.screenBuffer2x) {
         printLog("ERROR: failed to create screen buffer HQ!\nerror msg: %s", SDL_GetError());
@@ -332,6 +341,21 @@ int InitRenderDevice()
     Engine.texBuffer = new uint[GFX_LINESIZE * SCREEN_YSIZE];
     memset(Engine.texBuffer, 0, (GFX_LINESIZE * SCREEN_YSIZE) * sizeof(uint));
 
+#if RETRO_PLATFORM == RETRO_WIIU && RETRO_USING_SDL2 && !RETRO_USING_OPENGL && RETRO_SOFTWARE_RENDER
+    SDL_PixelFormat *screenFormat = SDL_AllocFormat(RETRO_SCREEN_TEXTURE_FORMAT);
+    if (!screenFormat) {
+        printLog("ERROR: failed to allocate screen pixel format!\nerror msg: %s", SDL_GetError());
+        return 0;
+    }
+    for (int c = 0; c < 0x10000; ++c) {
+        byte r = (byte)((c & 0b1111100000000000) >> 8);
+        byte g = (byte)((c & 0b0000011111100000) >> 3);
+        byte b = (byte)((c & 0b0000000000011111) << 3);
+        gfxPalette16to32[c] = SDL_MapRGBA(screenFormat, r, g, b, 0xFF);
+    }
+    SDL_FreeFormat(screenFormat);
+#endif
+
 #endif
 
     if (Engine.startFullScreen) {
@@ -343,7 +367,8 @@ int InitRenderDevice()
     OBJECT_BORDER_X4 = SCREEN_XSIZE + 0x20;
     // OBJECT_BORDER_Y4 = SCREEN_YSIZE + 0x80;
 
-    InitInputDevices();
+    if (!foregroundRenderReinit)
+        InitInputDevices();
 
 #if RETRO_PLATFORM == RETRO_WIIU
     InitDRCOverlay();
@@ -371,6 +396,10 @@ void FlipScreen()
 #if RETRO_USING_SDL2
     SDL_Rect destScreenPos_scaled;
     SDL_Texture *texTarget = NULL;
+
+    integerScaling = false;
+    bilinearScaling = false;
+    disableEnhancedScaling = false;
 
     switch (Engine.scalingMode) {
         // reset to default if value is invalid.
@@ -412,24 +441,33 @@ void FlipScreen()
         if (!bilinearScaling) {
             scale =
                 std::fminf(std::floor((float)Engine.windowXSize / (float)SCREEN_XSIZE), std::floor((float)Engine.windowYSize / (float)SCREEN_YSIZE));
+            if (scale < 1)
+                scale = 1;
         }
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear"); // set interpolation to linear
         // create texture that's integer scaled.
-        texTarget = SDL_CreateTexture(Engine.renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_TARGET, SCREEN_XSIZE * scale, SCREEN_YSIZE * scale);
-
-        // keep aspect
-        float aspectScale = std::fminf(Engine.windowYSize / screenysize, Engine.windowXSize / screenxsize);
-        if (integerScaling) {
-            aspectScale = std::floor(aspectScale);
+        texTarget = SDL_CreateTexture(Engine.renderer, RETRO_SCREEN_TEXTURE_FORMAT, SDL_TEXTUREACCESS_TARGET, SCREEN_XSIZE * scale, SCREEN_YSIZE * scale);
+        if (!texTarget) {
+            printLog("ERROR: failed to create scaled screen target!\nerror msg: %s", SDL_GetError());
+            SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
+            disableEnhancedScaling = true;
         }
-        float xoffset          = (Engine.windowXSize - (screenxsize * aspectScale)) / 2;
-        float yoffset          = (Engine.windowYSize - (screenysize * aspectScale)) / 2;
-        destScreenPos_scaled.x = std::round(xoffset);
-        destScreenPos_scaled.y = std::round(yoffset);
-        destScreenPos_scaled.w = std::round(screenxsize * aspectScale);
-        destScreenPos_scaled.h = std::round(screenysize * aspectScale);
-        // fill the screen with the texture, making lerp work.
-        SDL_RenderSetLogicalSize(Engine.renderer, Engine.windowXSize, Engine.windowYSize);
+
+        if (texTarget) {
+            // keep aspect
+            float aspectScale = std::fminf(Engine.windowYSize / screenysize, Engine.windowXSize / screenxsize);
+            if (integerScaling) {
+                aspectScale = std::floor(aspectScale);
+            }
+            float xoffset          = (Engine.windowXSize - (screenxsize * aspectScale)) / 2;
+            float yoffset          = (Engine.windowYSize - (screenysize * aspectScale)) / 2;
+            destScreenPos_scaled.x = std::round(xoffset);
+            destScreenPos_scaled.y = std::round(yoffset);
+            destScreenPos_scaled.w = std::round(screenxsize * aspectScale);
+            destScreenPos_scaled.h = std::round(screenysize * aspectScale);
+            // fill the screen with the texture, making lerp work.
+            SDL_RenderSetLogicalSize(Engine.renderer, Engine.windowXSize, Engine.windowYSize);
+        }
     }
 
     int pitch = 0;
@@ -439,10 +477,37 @@ void FlipScreen()
     // pillarboxes in fullscreen from displaying garbage data.
     SDL_RenderClear(Engine.renderer);
 
-    ushort *pixels = NULL;
-
     if (!drawStageGFXHQ) {
-        SDL_LockTexture(Engine.screenBuffer, NULL, (void **)&pixels, &pitch);
+#if RETRO_PLATFORM == RETRO_WIIU
+        uint *pixels = NULL;
+        if (SDL_LockTexture(Engine.screenBuffer, NULL, (void **)&pixels, &pitch) < 0) {
+            if (texTarget) {
+                SDL_SetRenderTarget(Engine.renderer, NULL);
+                SDL_DestroyTexture(texTarget);
+                SDL_RenderSetLogicalSize(Engine.renderer, SCREEN_XSIZE, SCREEN_YSIZE);
+                SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
+            }
+            return;
+        }
+        ushort *frameBufferPtr = Engine.frameBuffer;
+        for (int y = 0; y < SCREEN_YSIZE; ++y) {
+            for (int x = 0; x < SCREEN_XSIZE; ++x) {
+                pixels[x] = gfxPalette16to32[frameBufferPtr[x]];
+            }
+            frameBufferPtr += GFX_LINESIZE;
+            pixels += pitch / sizeof(uint);
+        }
+#else
+        ushort *pixels = NULL;
+        if (SDL_LockTexture(Engine.screenBuffer, NULL, (void **)&pixels, &pitch) < 0) {
+            if (texTarget) {
+                SDL_SetRenderTarget(Engine.renderer, NULL);
+                SDL_DestroyTexture(texTarget);
+                SDL_RenderSetLogicalSize(Engine.renderer, SCREEN_XSIZE, SCREEN_YSIZE);
+                SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
+            }
+            return;
+        }
         ushort *frameBufferPtr = Engine.frameBuffer;
         for (int y = 0; y < SCREEN_YSIZE; ++y) {
             for (int x = 0; x < SCREEN_XSIZE; ++x) {
@@ -451,6 +516,7 @@ void FlipScreen()
             frameBufferPtr += GFX_LINESIZE;
             pixels += pitch / sizeof(ushort);
         }
+#endif
         // memcpy(pixels, Engine.frameBuffer, pitch * SCREEN_YSIZE); //faster but produces issues with odd numbered screen sizes
         SDL_UnlockTexture(Engine.screenBuffer);
 
@@ -459,40 +525,91 @@ void FlipScreen()
     else {
         int w = 0, h = 0;
         SDL_QueryTexture(Engine.screenBuffer2x, NULL, NULL, &w, &h);
-        SDL_LockTexture(Engine.screenBuffer2x, NULL, (void **)&pixels, &pitch);
+#if RETRO_PLATFORM == RETRO_WIIU
+        uint *pixels = NULL;
+        if (SDL_LockTexture(Engine.screenBuffer2x, NULL, (void **)&pixels, &pitch) < 0) {
+            if (texTarget) {
+                SDL_SetRenderTarget(Engine.renderer, NULL);
+                SDL_DestroyTexture(texTarget);
+                SDL_RenderSetLogicalSize(Engine.renderer, SCREEN_XSIZE, SCREEN_YSIZE);
+                SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
+            }
+            return;
+        }
 
+        int dstPitch = pitch / sizeof(uint);
+        uint *dstRow = pixels;
         ushort *framebufferPtr = Engine.frameBuffer;
         for (int y = 0; y < (SCREEN_YSIZE / 2) + 12; ++y) {
-            for (int x = 0; x < GFX_LINESIZE; ++x) {
-                *pixels = *framebufferPtr;
-                pixels++;
-                *pixels = *framebufferPtr;
-                pixels++;
-                framebufferPtr++;
+            ushort *src = framebufferPtr;
+            for (int x = 0; x < SCREEN_XSIZE; ++x) {
+                uint pixel = gfxPalette16to32[src[x]];
+                dstRow[(x * 2) + 0] = pixel;
+                dstRow[(x * 2) + 1] = pixel;
             }
+            dstRow += dstPitch;
 
-            framebufferPtr -= GFX_LINESIZE;
-            for (int x = 0; x < GFX_LINESIZE; ++x) {
-                *pixels = *framebufferPtr;
-                pixels++;
-                *pixels = *framebufferPtr;
-                pixels++;
-                framebufferPtr++;
+            for (int x = 0; x < SCREEN_XSIZE; ++x) {
+                uint pixel = gfxPalette16to32[src[x]];
+                dstRow[(x * 2) + 0] = pixel;
+                dstRow[(x * 2) + 1] = pixel;
             }
+            dstRow += dstPitch;
+            framebufferPtr += GFX_LINESIZE;
         }
 
         framebufferPtr = Engine.frameBuffer2x;
         for (int y = 0; y < ((SCREEN_YSIZE / 2) - 12) * 2; ++y) {
-            for (int x = 0; x < GFX_LINESIZE; ++x) {
-                *pixels = *framebufferPtr;
-                framebufferPtr++;
-                pixels++;
-
-                *pixels = *framebufferPtr;
-                framebufferPtr++;
-                pixels++;
+            ushort *src = framebufferPtr;
+            for (int x = 0; x < SCREEN_XSIZE; ++x) {
+                dstRow[(x * 2) + 0] = gfxPalette16to32[src[(x * 2) + 0]];
+                dstRow[(x * 2) + 1] = gfxPalette16to32[src[(x * 2) + 1]];
             }
+            dstRow += dstPitch;
+            framebufferPtr += GFX_LINESIZE_DOUBLE;
         }
+#else
+        ushort *pixels = NULL;
+        if (SDL_LockTexture(Engine.screenBuffer2x, NULL, (void **)&pixels, &pitch) < 0) {
+            if (texTarget) {
+                SDL_SetRenderTarget(Engine.renderer, NULL);
+                SDL_DestroyTexture(texTarget);
+                SDL_RenderSetLogicalSize(Engine.renderer, SCREEN_XSIZE, SCREEN_YSIZE);
+                SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
+            }
+            return;
+        }
+
+        int dstPitch = pitch / sizeof(ushort);
+        ushort *dstRow = pixels;
+        ushort *framebufferPtr = Engine.frameBuffer;
+        for (int y = 0; y < (SCREEN_YSIZE / 2) + 12; ++y) {
+            ushort *src = framebufferPtr;
+            for (int x = 0; x < SCREEN_XSIZE; ++x) {
+                dstRow[(x * 2) + 0] = src[x];
+                dstRow[(x * 2) + 1] = src[x];
+            }
+            dstRow += dstPitch;
+
+            for (int x = 0; x < SCREEN_XSIZE; ++x) {
+                dstRow[(x * 2) + 0] = src[x];
+                dstRow[(x * 2) + 1] = src[x];
+            }
+            dstRow += dstPitch;
+            framebufferPtr += GFX_LINESIZE;
+        }
+
+        framebufferPtr = Engine.frameBuffer2x;
+        for (int y = 0; y < ((SCREEN_YSIZE / 2) - 12) * 2; ++y) {
+            ushort *src = framebufferPtr;
+            for (int x = 0; x < SCREEN_XSIZE; ++x) {
+                dstRow[(x * 2) + 0] = src[(x * 2) + 0];
+                dstRow[(x * 2) + 1] = src[(x * 2) + 1];
+            }
+            dstRow += dstPitch;
+            framebufferPtr += GFX_LINESIZE_DOUBLE;
+        }
+#endif
         SDL_UnlockTexture(Engine.screenBuffer2x);
         SDL_RenderCopy(Engine.renderer, Engine.screenBuffer2x, NULL, NULL);
     }
@@ -653,42 +770,87 @@ void FlipScreen()
 
 #endif
 }
-void ReleaseRenderDevice()
+static void ReleaseRenderDeviceInternal(bool keepGameCaches)
 {
-    ClearMeshData();
-    ClearTextures(false);
+    if (!keepGameCaches) {
+        ClearMeshData();
+        ClearTextures(false);
+    }
 
 #if !RETRO_USE_ORIGINAL_CODE
 #if RETRO_SOFTWARE_RENDER
-    if (Engine.frameBuffer)
+    if (Engine.frameBuffer) {
         delete[] Engine.frameBuffer;
-    if (Engine.frameBuffer2x)
+        Engine.frameBuffer = NULL;
+    }
+    if (Engine.frameBuffer2x) {
         delete[] Engine.frameBuffer2x;
+        Engine.frameBuffer2x = NULL;
+    }
 #if RETRO_USING_SDL2 && !RETRO_USING_OPENGL
-    SDL_DestroyTexture(Engine.screenBuffer);
-    Engine.screenBuffer = NULL;
+    if (Engine.screenBuffer) {
+        SDL_DestroyTexture(Engine.screenBuffer);
+        Engine.screenBuffer = NULL;
+    }
+    if (Engine.screenBuffer2x) {
+        SDL_DestroyTexture(Engine.screenBuffer2x);
+        Engine.screenBuffer2x = NULL;
+    }
 #endif
-    if (Engine.texBuffer)
+    if (Engine.texBuffer) {
         delete[] Engine.texBuffer;
+        Engine.texBuffer = NULL;
+    }
 
 #if RETRO_USING_SDL1
-    SDL_FreeSurface(Engine.screenBuffer);
+    if (Engine.screenBuffer) {
+        SDL_FreeSurface(Engine.screenBuffer);
+        Engine.screenBuffer = NULL;
+    }
 #endif
 #endif
 
 #if RETRO_USING_OPENGL
-    if (Engine.glContext)
+    if (Engine.glContext) {
         SDL_GL_DeleteContext(Engine.glContext);
+        Engine.glContext = NULL;
+    }
 #endif
 
 #if RETRO_USING_SDL2
 #if !RETRO_USING_OPENGL
-    SDL_DestroyRenderer(Engine.renderer);
+    if (Engine.renderer) {
+        SDL_DestroyRenderer(Engine.renderer);
+        Engine.renderer = NULL;
+    }
 #endif
-    SDL_DestroyWindow(Engine.window);
+    if (Engine.window) {
+        SDL_DestroyWindow(Engine.window);
+        Engine.window = NULL;
+    }
 #endif
 #endif
 }
+
+void ReleaseRenderDevice()
+{
+    ReleaseRenderDeviceInternal(false);
+}
+
+#if RETRO_PLATFORM == RETRO_WIIU
+void ReleaseRenderDeviceForForeground()
+{
+    ReleaseRenderDeviceInternal(true);
+}
+
+int RecreateRenderDeviceForForeground()
+{
+    foregroundRenderReinit = true;
+    int result = InitRenderDevice();
+    foregroundRenderReinit = false;
+    return result;
+}
+#endif
 
 void GenerateBlendLookupTable(void)
 {
