@@ -20,11 +20,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-# This is kinda hacky, but we'll see if it works
-      - name: Patch SDL nunchuk typo
+      - name: Patch SDL Wii U fixes
         run: |
-          sed -i 's/kpad\.nunchuck\b/kpad.nunchuk/g' \
-            dependencies/all/SDL/src/joystick/wiiu/SDL_wiiujoystick.c
+          git -C dependencies/all/SDL apply "$GITHUB_WORKSPACE/patches/sdl-wiiu-audio-input.patch"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

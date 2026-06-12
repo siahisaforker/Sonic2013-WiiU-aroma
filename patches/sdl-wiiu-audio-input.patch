@@ -1,0 +1,144 @@
+diff --git a/src/audio/wiiu/SDL_wiiuaudio.c b/src/audio/wiiu/SDL_wiiuaudio.c
+index 12a08857b..75a61337f 100644
+--- a/src/audio/wiiu/SDL_wiiuaudio.c
++++ b/src/audio/wiiu/SDL_wiiuaudio.c
+@@ -47,7 +47,6 @@
+ 
+ static void _WIIUAUDIO_framecallback();
+ static SDL_AudioDevice* cb_this;
+-#define cb_hidden cb_this->hidden
+ 
+ /*  Some helpers for AX-related math */
+ /*  Absolute address to an AXVoiceOffsets offset */
+@@ -218,19 +217,31 @@ static int WIIUAUDIO_OpenDevice(_THIS, void* handle, const char* devname, int is
+ 
+ /*  Called every 3ms before a frame of audio is rendered. Keep it fast! */
+ static void _WIIUAUDIO_framecallback() {
++    SDL_AudioDevice *device = cb_this;
++    if (!device || !device->hidden || !SDL_AtomicGet(&device->enabled)) {
++        return;
++    }
++
++    struct SDL_PrivateAudioData *hidden = device->hidden;
+     int playing_buffer = -1;
+     AXVoiceOffsets offs[6];
+     void* endaddr;
+ 
+-    for (int i = 0; i < cb_this->spec.channels; i++) {
+-        AXGetVoiceOffsets(cb_hidden->voice[i], &offs[i]);
++    for (int i = 0; i < device->spec.channels; i++) {
++        if (!hidden->voice[i]) {
++            return;
++        }
++        AXGetVoiceOffsets(hidden->voice[i], &offs[i]);
+     }
+ 
+ /*  Figure out which buffer is being played by the hardware */
+     for (int i = 0; i < NUM_BUFFERS; i++) {
+-        void* buf = cb_hidden->mixbufs[i];
++        void* buf = hidden->mixbufs[i];
++        if (!buf) {
++            continue;
++        }
+         uint32_t startOffset = calc_ax_offset(offs[0], buf);
+-        uint32_t endOffset = startOffset + cb_this->spec.samples;
++        uint32_t endOffset = startOffset + device->spec.samples;
+ 
+     /*  NOTE endOffset definitely needs to be <= (AX plays the sample at
+         endOffset), dunno about startOffset */
+@@ -259,35 +270,35 @@ static void _WIIUAUDIO_framecallback() {
+     }
+ 
+ /*  Make sure playingid is in sync with the hardware */
+-    cb_hidden->playingid = playing_buffer;
++    hidden->playingid = playing_buffer;
+ 
+ /*  Make sure the end offset is correct for the playing buffer */
+-    for (int i = 0; i < cb_this->spec.channels; i++) {
++    for (int i = 0; i < device->spec.channels; i++) {
+     /*  Calculate end address, aka start of the next (i+1) channel's buffer */
+-        endaddr = cb_hidden->mixbufs[cb_hidden->playingid] +
+-            (cb_this->spec.samples * sizeof_sample(offs[i]) * (i + 1));
++        endaddr = hidden->mixbufs[hidden->playingid] +
++            (device->spec.samples * sizeof_sample(offs[i]) * (i + 1));
+ 
+     /*  Trial end error to try and limit popping */
+         endaddr -= 2;
+ 
+         AXSetVoiceEndOffset(
+-            cb_hidden->voice[i],
++            hidden->voice[i],
+             calc_ax_offset(offs[i], endaddr)
+         );
+ 
+     /*  The next buffer is good to go, set the loop offset */
+-        if (cb_hidden->renderingid != next_id(cb_hidden->playingid)) {
++        if (hidden->renderingid != next_id(hidden->playingid)) {
+         /*  Calculate start address for this channel's buffer */
+-            void* loopaddr = cb_hidden->mixbufs[next_id(cb_hidden->playingid)] +
+-                (cb_this->spec.samples * sizeof_sample(offs[i]) * i);
++            void* loopaddr = hidden->mixbufs[next_id(hidden->playingid)] +
++                (device->spec.samples * sizeof_sample(offs[i]) * i);
+ 
+-            AXSetVoiceLoopOffset(cb_hidden->voice[i], calc_ax_offset(offs[i], loopaddr));
++            AXSetVoiceLoopOffset(hidden->voice[i], calc_ax_offset(offs[i], loopaddr));
+     /*  Otherwise, make sure the loop offset is correct for the playing buffer */
+         } else {
+-            void* loopaddr = cb_hidden->mixbufs[cb_hidden->playingid] +
+-                (cb_this->spec.samples * sizeof_sample(offs[i]) * i);
++            void* loopaddr = hidden->mixbufs[hidden->playingid] +
++                (device->spec.samples * sizeof_sample(offs[i]) * i);
+ 
+-            AXSetVoiceLoopOffset(cb_hidden->voice[i], calc_ax_offset(offs[i], loopaddr));
++            AXSetVoiceLoopOffset(hidden->voice[i], calc_ax_offset(offs[i], loopaddr));
+         }
+     }
+ }
+@@ -345,6 +356,10 @@ static Uint8* WIIUAUDIO_GetDeviceBuf(_THIS) {
+ }
+ 
+ static void WIIUAUDIO_CloseDevice(_THIS) {
++    if (cb_this == this) {
++        cb_this = NULL;
++    }
++
+     if (AXIsInit()) {
+         AXDeregisterAppFrameCallback(_WIIUAUDIO_framecallback);
+         for (int i = 0; i < SIZEOF_ARR(this->hidden->voice); i++) {
+diff --git a/src/joystick/wiiu/SDL_wiiujoystick.c b/src/joystick/wiiu/SDL_wiiujoystick.c
+index d345b24e7..aa3593c40 100644
+--- a/src/joystick/wiiu/SDL_wiiujoystick.c
++++ b/src/joystick/wiiu/SDL_wiiujoystick.c
+@@ -165,6 +165,21 @@ static void WIIU_JoystickDetect(void)
+ 		int wiiu_device = WIIU_DEVICE_WPAD(i);
+ 		int ret = WPADProbe(WIIU_WPAD_CHAN(wiiu_device), &ext);
+ 		if (ret == 0) { //controller connected
++			/* Skip bare Wiimotes (no extension or MotionPlus only).
++			   These are handled natively by the application for sideways
++			   input.  If SDL opens them, WIIU_JoystickUpdate will consume
++			   the KPAD data before the app can read it. */
++			if (ext == WPAD_EXT_CORE || ext == WPAD_EXT_MPLUS) {
++				/* If it was previously tracked (e.g. extension was just
++				   unplugged), disconnect it from SDL. */
++				if (WIIU_GetIndexForDevice(wiiu_device) != -1) {
++					SDL_JoystickID instance = WIIU_GetInstForDevice(wiiu_device);
++					SDL_PrivateJoystickRemoved(instance);
++					WIIU_RemoveDevice(wiiu_device);
++				}
++				continue;
++			}
++
+ 			/* Is this already connected? */
+ 			if (WIIU_GetIndexForDevice(wiiu_device) == -1) {
+ 				/* No! Let's add it. */
+@@ -455,8 +470,8 @@ static void WIIU_JoystickUpdate(SDL_Joystick *joystick)
+ 				if (kpad.release & wiimote_button_map[i])
+ 					SDL_PrivateJoystickButton(joystick, (Uint8)i, SDL_RELEASED);
+ 
+-			x1 = (int16_t) ((kpad.nunchuck.stick.x) * 0x7ff0);
+-			y1 = (int16_t) -((kpad.nunchuck.stick.y) * 0x7ff0);
++			x1 = (int16_t) ((kpad.nunchuk.stick.x) * 0x7ff0);
++			y1 = (int16_t) -((kpad.nunchuk.stick.y) * 0x7ff0);
+ 			SDL_PrivateJoystickAxis(joystick, 0, x1);
+ 			SDL_PrivateJoystickAxis(joystick, 1, y1);
+ 			break;

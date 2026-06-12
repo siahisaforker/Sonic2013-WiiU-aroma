@@ -17,6 +17,8 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 ICON_DIR = ROOT_DIR / "icon"
 MOD_DIR = ROOT_DIR / "mod"
 BIN_DIR = ROOT_DIR / "bin"
+SDL_DIR = ROOT_DIR / "dependencies" / "all" / "SDL"
+SDL_PATCHES = [ROOT_DIR / "patches" / "sdl-wiiu-audio-input.patch"]
 DEFAULT_OUT = ROOT_DIR / "out"
 S3AIR_PLUS_ROOT = Path(r"C:\Users\josiah\Music\sonic3air-plus-wiiu\sonic3air-plus-wiiu")
 DEFAULT_BOOT_SOUND = S3AIR_PLUS_ROOT / "assets" / "wiiu" / "boot.btsnd"
@@ -83,6 +85,35 @@ def setup_env() -> dict:
 def run(cmd, **kwargs):
     print(f"+ {' '.join(str(c) for c in cmd)}")
     subprocess.check_call(cmd, **kwargs)
+
+
+def apply_sdl_patches():
+    git = shutil.which("git")
+    if not git:
+        sys.exit("git is required to apply SDL patches")
+
+    for patch in SDL_PATCHES:
+        if not patch.is_file():
+            sys.exit(f"SDL patch not found: {patch}")
+
+        check = subprocess.run(
+            [git, "-C", str(SDL_DIR), "apply", "--check", str(patch)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if check.returncode == 0:
+            run([git, "-C", str(SDL_DIR), "apply", str(patch)])
+            continue
+
+        reverse_check = subprocess.run(
+            [git, "-C", str(SDL_DIR), "apply", "--reverse", "--check", str(patch)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if reverse_check.returncode == 0:
+            continue
+
+        sys.exit(f"SDL patch could not be applied cleanly: {patch}")
 
 
 def run_msys(command: str, env: dict, cwd: Path = ROOT_DIR):
@@ -156,6 +187,7 @@ def make_build_game(choice: str, jobs: int, env: dict):
 
 def build_game(choice: str, jobs: int, env: dict, build_system: str):
     print(f"\n=== Building RPX ({build_system}, PACKAGED_GAME={choice}) ===")
+    apply_sdl_patches()
     if build_system == "cmake":
         cmake_build_game(choice, jobs, env)
     else:
