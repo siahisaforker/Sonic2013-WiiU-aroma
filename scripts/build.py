@@ -63,6 +63,12 @@ def msys_path(path: Path | str) -> str:
     return text
 
 
+def devkit_shell_path(path: Path | str) -> str:
+    if platform.system() == "Windows":
+        return msys_path(path)
+    return str(Path(path).resolve())
+
+
 def setup_env() -> dict:
     env = os.environ.copy()
     dkp = find_devkitpro()
@@ -138,27 +144,35 @@ def run_msys(command: str, env: dict, cwd: Path = ROOT_DIR):
     run([str(bash), "-lc", script], env=env)
 
 
+def run_devkit_command(cmd: list[str], env: dict, cwd: Path = ROOT_DIR):
+    if platform.system() == "Windows":
+        run_msys(" ".join(shlex.quote(str(c)) for c in cmd), env, cwd)
+    else:
+        run([str(c) for c in cmd], cwd=cwd, env=env)
+
+
 def cmake_build_game(choice: str, jobs: int, env: dict):
     build_dir = ROOT_DIR / "build" / f"wiiu-sonic{choice}"
-    dkp_msys = msys_path(env["DEVKITPRO"])
-    cmake_wrapper = f"{dkp_msys}/portlibs/wiiu/bin/powerpc-eabi-cmake"
+    cmake_wrapper = Path(env["DEVKITPRO"]) / "portlibs" / "wiiu" / "bin" / "powerpc-eabi-cmake"
+    if not cmake_wrapper.is_file():
+        sys.exit(f"powerpc-eabi-cmake not found: {cmake_wrapper}")
 
-    configure = " ".join([
-        shlex.quote(cmake_wrapper),
-        "-S", shlex.quote(msys_path(ROOT_DIR)),
-        "-B", shlex.quote(msys_path(build_dir)),
+    configure = [
+        devkit_shell_path(cmake_wrapper),
+        "-S", devkit_shell_path(ROOT_DIR),
+        "-B", devkit_shell_path(build_dir),
         "-G", "Ninja",
-        f"-DPACKAGED_GAME={shlex.quote(choice)}",
+        f"-DPACKAGED_GAME={choice}",
         "-DCMAKE_BUILD_TYPE=Release",
-    ])
-    run_msys(configure, env)
+    ]
+    run_devkit_command(configure, env)
 
-    build = " ".join([
+    build = [
         "cmake",
-        "--build", shlex.quote(msys_path(build_dir)),
+        "--build", devkit_shell_path(build_dir),
         "--parallel", str(jobs),
-    ])
-    run_msys(build, env)
+    ]
+    run_devkit_command(build, env)
 
     rpx = BIN_DIR / "RSDKv4.rpx"
     cmake_rpx = build_dir / "RSDKv4.rpx"
